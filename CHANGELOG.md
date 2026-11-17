@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.1.0] - 2026-11-17
+
+### Added
+- **Configuration & Options**:
+  - Added `release.exclude-bots` configuration option to drop bot PRs from release notes.
+  - Extended default `bug` triage keywords to include `broken`, `not working`, `error`, `fails`, and `failure`.
+  - Added word-boundary keyword matching to avoid false positives on substrings.
+  - Added support for `Fixes: #N`, `Closes: #N`, and cross-repository `owner/repo#N` linked issue syntax.
+  - Support primary `.github/tendr.yml` with transparent backward-compatible fallback to `.github/maintainerkit.yml`.
+  - New `<!-- tendr:... -->` comment markers with automatic backward-compatible adoption of existing `<!-- maintainerkit:... -->` comments.
+
+### Fixed & Hardened
+- **Safety & Idempotency**:
+  - Gated release drafting strictly to release events (`workflow_dispatch`, tag `push`, `schedule`, `release`), preventing accidental release creation on issue or PR events.
+  - Made draft release creation idempotent by updating existing draft releases for the same tag rather than creating duplicates.
+  - Hardened `dry-run` input parsing to reject invalid values and guarantee zero writes on malformed inputs.
+  - Fixed required-info section parser to ignore code blocks, disallow URL schemes from starting sections, ignore non-alphanumeric headings, and match exact headings first.
+  - Fixed duplicate issue detection window to query open and closed issues separately, respect `includeClosedDays: 0` (open only), and cap candidate issues at 1,000.
+  - Bot accounts are excluded from New Contributors.
+  - Filtered moving major tags (`v1`) from latest version detection to prevent duplicate version bumps.
+  - Optimized closed PR collection with early pagination termination once `updated_at` precedes the release window.
+  - Enhanced retry logic: retries only on rate limits (429 or rate-limited 403s with `retry-after`/reset headers); permission 403s fail immediately with actionable workflow permission guidance.
+  - Non-404 configuration load errors (e.g., 403/500) now fail the run with clear diagnostic errors instead of silently reverting to defaults.
+  - Capped sensitive paths listing at 20 files with `…and N more`, and guarded sticky comments at 60,000 characters to prevent GitHub 422 payload errors.
+  - Added workflow `concurrency` blocks to prevent race conditions during rapid consecutive events.
+  - Restricted auto-labeling to `opened` events, preserving intentional manual edits by maintainers.
+  - Stale `needs-info` labels and comments are now cleaned up when issue labels change and required sections no longer apply.
+  - `labels-added` output accurately reflects applied labels and returns empty in dry-run; job summary is guaranteed to write in a `finally` block even on failure.
+
+---
+
 ## [1.0.0] - 2026-11-17
 
 ### Added

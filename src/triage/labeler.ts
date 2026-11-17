@@ -22,11 +22,15 @@ export function matchesRule(rule: LabelRule, text: string): boolean {
   // Safety guard against massive payloads causing ReDoS
   const safeText = text.slice(0, 50000).toLowerCase();
 
-  // 1. Keyword check (case-insensitive substring)
+  // 1. Keyword check (case-insensitive with word boundaries)
   for (const kw of rule.keywords) {
     if (!kw) continue;
     const cleanKw = kw.trim().toLowerCase();
-    if (cleanKw.length > 0 && safeText.includes(cleanKw)) {
+    if (cleanKw.length === 0) continue;
+
+    const escaped = escapeRegex(cleanKw);
+    const kwRegex = new RegExp(`(^|\\W)${escaped}($|\\W)`, 'i');
+    if (kwRegex.test(safeText)) {
       return true;
     }
   }

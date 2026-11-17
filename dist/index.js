@@ -32475,24 +32475,39 @@ exports.loadConfig = loadConfig;
 const yaml = __importStar(__nccwpck_require__(8815));
 const schema_1 = __nccwpck_require__(131);
 const logger_1 = __nccwpck_require__(6618);
+async function fetchConfigContent(fetcher, path) {
+    try {
+        return await fetcher.getFileContent(path);
+    }
+    catch (err) {
+        const status = err?.status;
+        if (status === 404) {
+            return null;
+        }
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        throw new Error(`Failed to load configuration file (${path}): ${errorMsg}`);
+    }
+}
 /**
- * Loads and parses MaintainerKit configuration.
- * If the config file does not exist, returns safe default configuration.
- * If the config file exists but has syntax or schema errors, throws a descriptive error.
+ * Loads and parses Tendr configuration.
+ * If the config file does not exist (404), returns safe default configuration.
+ * If the config file exists but has syntax or schema errors, or fails with 403/500, throws a descriptive error.
  */
 async function loadConfig(fetcher, configPath) {
     logger_1.logger.info(`Loading configuration from: ${configPath}`);
-    let rawContent = null;
-    try {
-        rawContent = await fetcher.getFileContent(configPath);
-        // If not found and using default maintainerkit.yml, also try .github/tendr.yml
-        if (!rawContent && configPath === '.github/maintainerkit.yml') {
-            rawContent = await fetcher.getFileContent('.github/tendr.yml');
+    let rawContent = await fetchConfigContent(fetcher, configPath);
+    // Backward compatibility: fallback between .github/tendr.yml and .github/maintainerkit.yml
+    if (!rawContent && (configPath === '.github/tendr.yml' || configPath === '.github/maintainerkit.yml')) {
+        const fallbackPath = configPath === '.github/tendr.yml' ? '.github/maintainerkit.yml' : '.github/tendr.yml';
+        try {
+            rawContent = await fetchConfigContent(fetcher, fallbackPath);
+            if (rawContent) {
+                logger_1.logger.info(`Loaded configuration from fallback path: ${fallbackPath}`);
+            }
         }
-    }
-    catch (err) {
-        const errorMsg = err instanceof Error ? err.message : String(err);
-        logger_1.logger.warn(`Failed to retrieve configuration file (${configPath}): ${errorMsg}`);
+        catch {
+            // Fallback failure is non-fatal if default was missing
+        }
     }
     if (!rawContent || rawContent.trim().length === 0) {
         logger_1.logger.info(`No configuration file found at ${configPath}. Using defaults.`);
@@ -32526,7 +32541,7 @@ async function loadConfig(fetcher, configPath) {
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.MaintainerKitConfigSchema = exports.ReleaseConfigSchema = exports.ReleaseCategorySchema = exports.PullRequestsConfigSchema = exports.TriageConfigSchema = exports.WelcomeMessageSchema = exports.TriageDuplicatesSchema = exports.LabelRuleSchema = void 0;
+exports.MaintainerKitConfigSchema = exports.TendrConfigSchema = exports.ReleaseConfigSchema = exports.ReleaseCategorySchema = exports.PullRequestsConfigSchema = exports.TriageConfigSchema = exports.WelcomeMessageSchema = exports.TriageDuplicatesSchema = exports.LabelRuleSchema = void 0;
 exports.normalizeRawConfig = normalizeRawConfig;
 exports.parseConfig = parseConfig;
 const zod_1 = __nccwpck_require__(924);
@@ -32549,7 +32564,18 @@ exports.TriageConfigSchema = zod_1.z.object({
     labels: zod_1.z.array(exports.LabelRuleSchema).default([
         {
             label: 'bug',
-            keywords: ['crash', 'exception', 'traceback', "doesn't work", 'regression'],
+            keywords: [
+                'crash',
+                'exception',
+                'traceback',
+                "doesn't work",
+                'regression',
+                'broken',
+                'not working',
+                'error',
+                'fails',
+                'failure',
+            ],
             patterns: [],
         },
         {
@@ -32595,6 +32621,7 @@ exports.ReleaseCategorySchema = zod_1.z.object({
     types: zod_1.z.array(zod_1.z.string()).optional().default([]),
 });
 exports.ReleaseConfigSchema = zod_1.z.object({
+    excludeBots: zod_1.z.boolean().default(false),
     categories: zod_1.z.array(exports.ReleaseCategorySchema).default([
         { title: 'Breaking Changes', labels: ['breaking'], types: [] },
         { title: 'Features', labels: ['enhancement'], types: ['feat'] },
@@ -32607,11 +32634,12 @@ exports.ReleaseConfigSchema = zod_1.z.object({
         },
     ]),
 });
-exports.MaintainerKitConfigSchema = zod_1.z.object({
+exports.TendrConfigSchema = zod_1.z.object({
     triage: exports.TriageConfigSchema.default({}),
     pullRequests: exports.PullRequestsConfigSchema.default({}),
     release: exports.ReleaseConfigSchema.default({}),
 });
+exports.MaintainerKitConfigSchema = exports.TendrConfigSchema;
 /**
  * Normalizes snake-case or kebab-case keys from raw YAML into camelCase
  * to accept standard user YAML inputs like `required-info` and `size-thresholds`.
@@ -32641,7 +32669,7 @@ function parseConfig(rawYamlObject) {
         const errorDetails = parsed.error.issues
             .map((issue) => `  - Key: "${issue.path.join('.')}" | Expected: ${issue.message}`)
             .join('\n');
-        throw new Error(`Invalid MaintainerKit configuration in config file:\n${errorDetails}\nPlease review the configuration reference in docs/configuration.md.`);
+        throw new Error(`Invalid Tendr (MaintainerKit) configuration in config file:\n${errorDetails}\nPlease review the configuration reference in docs/configuration.md.`);
     }
     return parsed.data;
 }
@@ -32690,6 +32718,7 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.GitHubClient = void 0;
 exports.sanitizeUserText = sanitizeUserText;
+const fs = __importStar(__nccwpck_require__(9896));
 const github = __importStar(__nccwpck_require__(3228));
 const logger_1 = __nccwpck_require__(6618);
 const summary_1 = __nccwpck_require__(7724);
@@ -32726,7 +32755,8 @@ class GitHubClient {
         }
     }
     /**
-     * Safe API call wrapper with retries on rate limits (403/429)
+     * Safe API call wrapper with retries on rate limits (429 or rate-limited 403s).
+     * Non-rate-limit 403s (e.g. permission errors) fail immediately with clear instructions.
      */
     async requestWithRetry(fn, maxRetries = 3) {
         let attempt = 0;
@@ -32737,11 +32767,37 @@ class GitHubClient {
             }
             catch (err) {
                 attempt++;
-                const status = err?.status;
-                const isRateLimit = status === 403 || status === 429;
+                const errObj = err;
+                const status = errObj?.status;
+                const headers = errObj?.response?.headers || {};
+                const msg = String(errObj?.message || '').toLowerCase();
+                const remaining = headers['x-ratelimit-remaining'];
+                const retryAfter = headers['retry-after'];
+                const isRateLimitMsg = msg.includes('rate limit') || msg.includes('secondary rate limit');
+                const isRateLimit = status === 429 ||
+                    (status === 403 && (remaining === '0' || Boolean(retryAfter) || isRateLimitMsg));
+                if (status === 403 && !isRateLimit) {
+                    throw new Error(`GitHub returned 403 (${errObj?.message || 'Forbidden'}). Check the workflow permissions: issues: write, pull-requests: write, contents: read.`);
+                }
                 if (isRateLimit && attempt < maxRetries) {
-                    logger_1.logger.warn(`GitHub API rate limit or secondary limit hit (status ${status}). Retrying in ${delayMs}ms (attempt ${attempt}/${maxRetries})...`);
-                    await new Promise((resolve) => setTimeout(resolve, delayMs));
+                    let waitMs = delayMs;
+                    if (retryAfter) {
+                        const parsed = parseInt(retryAfter, 10);
+                        if (!isNaN(parsed) && parsed > 0) {
+                            waitMs = Math.min(60000, parsed * 1000);
+                        }
+                    }
+                    else if (headers['x-ratelimit-reset'] && remaining === '0') {
+                        const resetSec = parseInt(headers['x-ratelimit-reset'], 10);
+                        if (!isNaN(resetSec)) {
+                            const diff = resetSec * 1000 - Date.now();
+                            if (diff > 0) {
+                                waitMs = Math.min(60000, Math.max(1000, diff));
+                            }
+                        }
+                    }
+                    logger_1.logger.warn(`GitHub API rate limit or secondary limit hit (status ${status}). Retrying in ${waitMs}ms (attempt ${attempt}/${maxRetries})...`);
+                    await new Promise((resolve) => setTimeout(resolve, waitMs));
                     delayMs *= 2;
                     continue;
                 }
@@ -32754,6 +32810,15 @@ class GitHubClient {
      * Fetches content of a file from repository. Returns null if file does not exist (404).
      */
     async getFileContent(filePath) {
+        // 1. Check local filesystem first (saves API rate limit calls in local runs & checked-out workspaces)
+        if (fs.existsSync(filePath)) {
+            try {
+                return fs.readFileSync(filePath, 'utf8');
+            }
+            catch {
+                // proceed to API fetch
+            }
+        }
         try {
             const response = await this.requestWithRetry(() => this.octokit.rest.repos.getContent({
                 owner: this.owner,
@@ -32864,12 +32929,21 @@ class GitHubClient {
      * Lists comments on an issue or PR with pagination.
      */
     async listComments(issueNumber) {
-        return this.octokit.paginate(this.octokit.rest.issues.listComments, {
-            owner: this.owner,
-            repo: this.repo,
-            issue_number: issueNumber,
-            per_page: 100,
-        });
+        try {
+            return await this.requestWithRetry(() => this.octokit.paginate(this.octokit.rest.issues.listComments, {
+                owner: this.owner,
+                repo: this.repo,
+                issue_number: issueNumber,
+                per_page: 100,
+            }));
+        }
+        catch (err) {
+            if (this.dryRun) {
+                logger_1.logger.warn(`[DRY-RUN] Could not fetch comments for #${issueNumber}: ${String(err)}`);
+                return [];
+            }
+            throw err;
+        }
     }
     /**
      * Creates a comment on an issue or PR.
@@ -32932,36 +33006,113 @@ class GitHubClient {
      * Fetches changed files in a pull request with pagination.
      */
     async listPullRequestFiles(prNumber) {
-        const files = await this.octokit.paginate(this.octokit.rest.pulls.listFiles, {
-            owner: this.owner,
-            repo: this.repo,
-            pull_number: prNumber,
-            per_page: 100,
-        });
-        return files.map((f) => ({
-            filename: f.filename,
-            status: f.status,
-            additions: f.additions,
-            deletions: f.deletions,
-            changes: f.changes,
-        }));
+        try {
+            const files = await this.requestWithRetry(() => this.octokit.paginate(this.octokit.rest.pulls.listFiles, {
+                owner: this.owner,
+                repo: this.repo,
+                pull_number: prNumber,
+                per_page: 100,
+            }));
+            return files.map((f) => ({
+                filename: f.filename,
+                status: f.status,
+                additions: f.additions,
+                deletions: f.deletions,
+                changes: f.changes,
+            }));
+        }
+        catch (err) {
+            if (this.dryRun) {
+                logger_1.logger.warn(`[DRY-RUN] Could not fetch PR files for #${prNumber}: ${String(err)}`);
+                return [];
+            }
+            throw err;
+        }
     }
     /**
      * List recent issues for duplicate checking (with optional closed issues within window).
      */
     async listIssues(options) {
-        return this.octokit.paginate(this.octokit.rest.issues.listForRepo, {
-            owner: this.owner,
-            repo: this.repo,
-            state: options?.state || 'open',
-            since: options?.since,
-            per_page: 100,
-        });
+        try {
+            return await this.requestWithRetry(() => this.octokit.paginate(this.octokit.rest.issues.listForRepo, {
+                owner: this.owner,
+                repo: this.repo,
+                state: options?.state || 'open',
+                since: options?.since,
+                per_page: 100,
+            }));
+        }
+        catch (err) {
+            if (this.dryRun) {
+                logger_1.logger.warn(`[DRY-RUN] Could not fetch issues for duplicate check: ${String(err)}`);
+                return [];
+            }
+            throw err;
+        }
     }
     /**
      * Creates a draft release.
      */
     async createDraftRelease(params) {
+        // 1. Check existing releases to ensure idempotency
+        let existingReleases = [];
+        if (this.octokit?.paginate && this.octokit?.rest?.repos?.listReleases) {
+            try {
+                const res = await this.octokit.paginate(this.octokit.rest.repos.listReleases, {
+                    owner: this.owner,
+                    repo: this.repo,
+                    per_page: 100,
+                });
+                if (Array.isArray(res)) {
+                    existingReleases = res;
+                }
+            }
+            catch (err) {
+                logger_1.logger.warn(`Could not list existing releases: ${String(err)}`);
+            }
+        }
+        const existingMatch = (existingReleases || []).find((r) => r?.tag_name === params.tagName);
+        if (existingMatch) {
+            if (!existingMatch.draft) {
+                logger_1.logger.info(`Release ${params.tagName} is already published (id: ${existingMatch.id}). Skipping draft creation.`);
+                summary_1.stepSummary.addItem({
+                    type: 'release',
+                    title: `Release ${params.tagName} already published`,
+                    details: `Skipped: tag ${params.tagName} is already published at ${existingMatch.html_url}`,
+                    status: 'skipped',
+                });
+                return { id: existingMatch.id, html_url: existingMatch.html_url };
+            }
+            // Existing release is a draft: update it instead of creating a duplicate
+            if (this.dryRun) {
+                logger_1.logger.info(`[DRY-RUN] Would update existing draft release ${params.tagName} (id: ${existingMatch.id})`);
+                summary_1.stepSummary.addItem({
+                    type: 'release',
+                    title: `Update Draft Release ${params.tagName}`,
+                    details: `Existing draft #${existingMatch.id}`,
+                    status: 'would-apply',
+                });
+                return { id: existingMatch.id, html_url: existingMatch.html_url };
+            }
+            const response = await this.requestWithRetry(() => this.octokit.rest.repos.updateRelease({
+                owner: this.owner,
+                repo: this.repo,
+                release_id: existingMatch.id,
+                tag_name: params.tagName,
+                name: params.name,
+                body: params.body,
+                draft: true,
+                target_commitish: params.targetCommitish,
+            }));
+            logger_1.logger.info(`Updated existing draft release ${params.tagName} (id: ${response.data.id})`);
+            summary_1.stepSummary.addItem({
+                type: 'release',
+                title: `Updated Draft Release ${params.tagName}`,
+                details: response.data.html_url,
+                status: 'applied',
+            });
+            return { id: response.data.id, html_url: response.data.html_url };
+        }
         if (this.dryRun) {
             logger_1.logger.info(`[DRY-RUN] Would create draft release ${params.tagName}: "${params.name}"`);
             summary_1.stepSummary.addItem({
@@ -33008,27 +33159,57 @@ exports.findCommentByMarker = findCommentByMarker;
 exports.postOrUpdateStickyComment = postOrUpdateStickyComment;
 const logger_1 = __nccwpck_require__(6618);
 exports.COMMENT_MARKERS = {
-    TRIAGE_INFO: '<!-- maintainerkit:triage-info -->',
-    DUPLICATE_INFO: '<!-- maintainerkit:duplicate-info -->',
-    WELCOME_MESSAGE: '<!-- maintainerkit:welcome-message -->',
-    PR_REPORT: '<!-- maintainerkit:pr-report -->',
+    TRIAGE_INFO: '<!-- tendr:triage-info -->',
+    DUPLICATE_INFO: '<!-- tendr:duplicate-info -->',
+    WELCOME_MESSAGE: '<!-- tendr:welcome-message -->',
+    PR_REPORT: '<!-- tendr:pr-report -->',
 };
+function getMarkerVariants(marker) {
+    const match = marker.match(/<!--\s*(?:tendr|maintainerkit):([a-z0-9_-]+)\s*-->/i);
+    if (match) {
+        const key = match[1];
+        return [`<!-- tendr:${key} -->`, `<!-- maintainerkit:${key} -->`];
+    }
+    return [marker];
+}
 /**
  * Finds an existing comment on an issue or PR matching a specific hidden HTML marker.
+ * Supports backward-compatible search for legacy maintainerkit markers.
+ * Prefers bot comments and sorts by oldest comment ID if multiple exist.
  */
 async function findCommentByMarker(client, issueNumber, marker) {
     const comments = await client.listComments(issueNumber);
-    const found = comments.find((c) => c.body && c.body.includes(marker));
-    return found || null;
+    const variants = getMarkerVariants(marker);
+    const matches = comments.filter((c) => c.body && variants.some((v) => c.body?.includes(v)));
+    if (matches.length === 0)
+        return null;
+    const isBot = (c) => c.user?.type === 'Bot' || Boolean(c.user?.login?.endsWith('[bot]'));
+    matches.sort((a, b) => {
+        const aBot = isBot(a) ? 1 : 0;
+        const bBot = isBot(b) ? 1 : 0;
+        if (aBot !== bBot)
+            return bBot - aBot; // Bot comments prioritized
+        return a.id - b.id; // Oldest first
+    });
+    if (matches.length > 1) {
+        logger_1.logger.warn(`Found ${matches.length} comments matching marker "${marker}" on #${issueNumber}. Updating oldest (#${matches[0].id}).`);
+    }
+    return matches[0];
 }
 /**
  * Posts or updates a sticky comment containing the specified marker.
  * If a comment with the marker exists, it updates it.
  * If none exists, it creates a new comment with the marker prepended.
  * Idempotent: ensures only one comment with that marker exists.
+ * Truncates bodies to fit well within GitHub's 65,536-character limit.
  */
 async function postOrUpdateStickyComment(client, issueNumber, marker, content) {
-    const fullBody = `${marker}\n${content.trim()}`;
+    let fullBody = `${marker}\n${content.trim()}`;
+    const MAX_COMMENT_LENGTH = 60000;
+    if (fullBody.length > MAX_COMMENT_LENGTH) {
+        const truncationNote = '\n\n*(Note: Comment content truncated to fit GitHub size limits [truncated])*';
+        fullBody = fullBody.slice(0, MAX_COMMENT_LENGTH - truncationNote.length) + truncationNote;
+    }
     const existing = await findCommentByMarker(client, issueNumber, marker);
     if (existing) {
         if (existing.body?.trim() === fullBody.trim()) {
@@ -33106,20 +33287,51 @@ const logger_1 = __nccwpck_require__(6618);
 const summary_1 = __nccwpck_require__(7724);
 async function run() {
     try {
-        const token = core.getInput('github-token') || process.env.GITHUB_TOKEN || '';
+        const token = core.getInput('github-token') ||
+            process.env.INPUT_GITHUB_TOKEN ||
+            process.env.GITHUB_TOKEN ||
+            '';
         if (!token) {
             throw new Error('No GitHub token provided. Ensure "github-token" input is set.');
         }
         core.setSecret(token);
-        const configPath = core.getInput('config-path') || '.github/maintainerkit.yml';
-        const dryRun = core.getInput('dry-run') === 'true';
-        const featuresInput = core.getInput('features') || 'triage,pull-requests';
-        const releaseTagInput = core.getInput('release-tag') || '';
+        let dryRun = false;
+        const rawDryRun = (core.getInput('dry-run') ||
+            process.env.INPUT_DRY_RUN ||
+            process.env.DRY_RUN ||
+            '').trim();
+        if (rawDryRun !== '') {
+            const lower = rawDryRun.toLowerCase();
+            if (lower === 'true') {
+                dryRun = true;
+            }
+            else if (lower === 'false') {
+                dryRun = false;
+            }
+            else {
+                const errorMsg = `Invalid value for "dry-run": expected true or false (got "${rawDryRun}").`;
+                logger_1.logger.error(errorMsg);
+                core.setFailed(errorMsg);
+                return;
+            }
+        }
+        const configPath = core.getInput('config-path') ||
+            process.env.INPUT_CONFIG_PATH ||
+            process.env.CONFIG_PATH ||
+            '.github/tendr.yml';
+        const featuresInput = core.getInput('features') ||
+            process.env.INPUT_FEATURES ||
+            process.env.FEATURES ||
+            'triage,pull-requests';
+        const releaseTagInput = core.getInput('release-tag') ||
+            process.env.INPUT_RELEASE_TAG ||
+            process.env.RELEASE_TAG ||
+            '';
         const enabledFeatures = featuresInput
             .split(',')
             .map((f) => f.trim().toLowerCase())
             .filter(Boolean);
-        logger_1.logger.info(`MaintainerKit initialized (dryRun: ${dryRun}, features: ${enabledFeatures.join(', ')})`);
+        logger_1.logger.info(`Tendr initialized (dryRun: ${dryRun}, features: ${enabledFeatures.join(', ')})`);
         summary_1.stepSummary.setDryRun(dryRun);
         const client = new client_1.GitHubClient({
             token,
@@ -33145,19 +33357,22 @@ async function run() {
             const body = issue.body || '';
             const existingLabels = (issue.labels || []).map((l) => l.name);
             logger_1.logger.startGroup(`Triage processing for Issue #${issueNumber}`);
-            // 1. Auto-labeling
-            const labelsToAdd = (0, labeler_1.determineLabelsToAdd)(config.triage.labels, {
-                title,
-                body,
-                existingLabels,
-            });
-            if (labelsToAdd.length > 0) {
-                logger_1.logger.info(`Adding labels to #${issueNumber}: ${labelsToAdd.join(', ')}`);
-                await client.addLabels(issueNumber, labelsToAdd);
-                labelsAddedTotal.push(...labelsToAdd);
-            }
-            else {
-                logger_1.logger.info(`No new labels matched for #${issueNumber}.`);
+            // 1. Auto-labeling (only on opened; preserve maintainer edits)
+            let labelsToAdd = [];
+            if (payload.action === 'opened') {
+                labelsToAdd = (0, labeler_1.determineLabelsToAdd)(config.triage.labels, {
+                    title,
+                    body,
+                    existingLabels,
+                });
+                if (labelsToAdd.length > 0) {
+                    logger_1.logger.info(`Adding labels to #${issueNumber}: ${labelsToAdd.join(', ')}`);
+                    const applied = await client.addLabels(issueNumber, labelsToAdd);
+                    labelsAddedTotal.push(...applied);
+                }
+                else {
+                    logger_1.logger.info(`No new labels matched for #${issueNumber}.`);
+                }
             }
             // Combine existing + newly added labels for required-info check
             const currentLabels = Array.from(new Set([...existingLabels, ...labelsToAdd]));
@@ -33238,55 +33453,74 @@ async function run() {
             logger_1.logger.endGroup();
         }
         // --- FEATURE C: RELEASE DRAFTING ---
-        const isReleaseEvent = eventName === 'workflow_dispatch' ||
-            (eventName === 'push' && Boolean(payload.ref && payload.ref.startsWith('refs/tags/'))) ||
-            enabledFeatures.includes('release');
-        if (isReleaseEvent && enabledFeatures.includes('release')) {
-            logger_1.logger.startGroup('Release Drafting');
-            // 1. Find latest release or tag
-            const latest = await (0, collect_1.getLatestReleaseOrTag)(client);
-            logger_1.logger.info(`Latest tag detected: ${latest.tagName || 'none'} (date: ${latest.publishedAt || 'none'})`);
-            // 2. Collect merged PRs
-            const { prs, firstTimeContributors } = await (0, collect_1.collectMergedPRs)(client, latest.publishedAt);
-            logger_1.logger.info(`Collected ${prs.length} merged PRs for release drafting.`);
-            // 3. Classify PRs
-            const { classified } = (0, classify_1.classifyPullRequests)(prs, config.release);
-            // 4. Determine semver bump
-            const bumpType = (0, semver_1.determineBumpType)(classified.map((c) => ({
-                isBreaking: c.isBreaking,
-                type: c.conventionalType,
-            })));
-            const targetVersion = releaseTagInput || (0, semver_1.bumpVersion)(latest.tagName, bumpType);
-            suggestedVersionOutput = targetVersion;
-            logger_1.logger.info(`Suggested next version: ${targetVersion} (bump type: ${bumpType})`);
-            // 5. Generate release notes
-            releaseNotesOutput = (0, notes_1.generateReleaseNotes)({
-                version: targetVersion,
-                previousVersion: latest.tagName || undefined,
-                classifiedPRs: classified,
-                config: config.release,
-                firstTimeContributors,
-            });
-            // 6. Create draft release
-            await client.createDraftRelease({
-                tagName: targetVersion,
-                name: `Release ${targetVersion}`,
-                body: releaseNotesOutput,
-            });
-            logger_1.logger.endGroup();
+        const releaseEventNames = ['workflow_dispatch', 'schedule', 'release'];
+        const isTagPush = eventName === 'push' && Boolean(payload.ref && payload.ref.startsWith('refs/tags/'));
+        const isReleaseEvent = releaseEventNames.includes(eventName) || isTagPush;
+        if (enabledFeatures.includes('release')) {
+            if (!isReleaseEvent) {
+                logger_1.logger.info(`Release drafting skipped: event "${eventName}" is not a release event.`);
+                summary_1.stepSummary.addItem({
+                    type: 'release',
+                    title: 'Release drafting skipped',
+                    details: `Event "${eventName}" is not a release event (expected workflow_dispatch, tag push, schedule, or release)`,
+                    status: 'skipped',
+                });
+            }
+            else {
+                logger_1.logger.startGroup('Release Drafting');
+                // 1. Find latest release or tag
+                const latest = await (0, collect_1.getLatestReleaseOrTag)(client);
+                logger_1.logger.info(`Latest tag detected: ${latest.tagName || 'none'} (date: ${latest.publishedAt || 'none'})`);
+                // 2. Collect merged PRs
+                const { prs, firstTimeContributors } = await (0, collect_1.collectMergedPRs)(client, latest.publishedAt, {
+                    excludeBots: config.release.excludeBots,
+                });
+                logger_1.logger.info(`Collected ${prs.length} merged PRs for release drafting.`);
+                // 3. Classify PRs
+                const { classified } = (0, classify_1.classifyPullRequests)(prs, config.release);
+                // 4. Determine semver bump
+                const bumpType = (0, semver_1.determineBumpType)(classified.map((c) => ({
+                    isBreaking: c.isBreaking,
+                    type: c.conventionalType,
+                })));
+                const targetVersion = releaseTagInput || (0, semver_1.bumpVersion)(latest.tagName, bumpType);
+                suggestedVersionOutput = targetVersion;
+                logger_1.logger.info(`Suggested next version: ${targetVersion} (bump type: ${bumpType})`);
+                // 5. Generate release notes
+                releaseNotesOutput = (0, notes_1.generateReleaseNotes)({
+                    version: targetVersion,
+                    previousVersion: latest.tagName || undefined,
+                    classifiedPRs: classified,
+                    config: config.release,
+                    firstTimeContributors,
+                });
+                // 6. Create draft release
+                await client.createDraftRelease({
+                    tagName: targetVersion,
+                    name: `Release ${targetVersion}`,
+                    body: releaseNotesOutput,
+                });
+                logger_1.logger.endGroup();
+            }
         }
         // Set outputs
-        core.setOutput('labels-added', labelsAddedTotal.join(','));
+        core.setOutput('labels-added', dryRun ? '' : Array.from(new Set(labelsAddedTotal)).join(', '));
         core.setOutput('duplicates-found', JSON.stringify(duplicatesFound));
         core.setOutput('suggested-version', suggestedVersionOutput);
         core.setOutput('release-notes', releaseNotesOutput);
-        // Write job summary
-        await summary_1.stepSummary.write();
     }
     catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
         logger_1.logger.error(errorMsg);
         core.setFailed(errorMsg);
+    }
+    finally {
+        try {
+            await summary_1.stepSummary.write();
+        }
+        catch (err) {
+            logger_1.logger.warn(`Failed to write step summary: ${String(err)}`);
+        }
     }
 }
 if (process.env.NODE_ENV !== 'test') {
@@ -33309,7 +33543,7 @@ exports.analyzePullRequest = analyzePullRequest;
 const picomatch_1 = __importDefault(__nccwpck_require__(4006));
 const size_1 = __nccwpck_require__(4457);
 const conventional_1 = __nccwpck_require__(4255);
-const LINKED_ISSUE_REGEX = /\b(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+(?:#\d+|https?:\/\/github\.com\/[^/\s]+\/[^/\s]+\/(?:issues|pull)\/\d+)/i;
+const LINKED_ISSUE_REGEX = /\b(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved):?\s+(?:(?:[a-z0-9_.-]+\/[a-z0-9_.-]+)?#\d+|https?:\/\/github\.com\/[^/\s]+\/[^/\s]+\/(?:issues|pull)\/\d+)/i;
 /**
  * Checks if a filename represents a source code file.
  */
@@ -33435,7 +33669,7 @@ function generatePRReportMarkdown(result) {
     lines.push(`**Changes**: **${result.totalFiles}** file(s) modified (**+${result.additions}** / **-${result.deletions}** lines, total: **${result.totalChanges}**) · **Size**: \`${result.sizeLabel}\``);
     lines.push('');
     // Area Breakdown Table
-    if (result.areaGroups.length > 0) {
+    if (result.areaGroups && result.areaGroups.length > 0) {
         lines.push('#### 📂 Changes by Area');
         lines.push('');
         lines.push('| Area | Files | Changes (+ / -) |');
@@ -33462,8 +33696,13 @@ function generatePRReportMarkdown(result) {
     // 3. Risky paths check
     if (result.riskyFiles.length > 0) {
         lines.push(`- ⚠️ **Sensitive Paths**: **${result.riskyFiles.length}** critical file(s) modified that require extra review:`);
-        for (const rf of result.riskyFiles) {
+        const MAX_SHOWN_RISKY = 20;
+        const shown = result.riskyFiles.slice(0, MAX_SHOWN_RISKY);
+        for (const rf of shown) {
             lines.push(`  - \`${rf}\``);
+        }
+        if (result.riskyFiles.length > MAX_SHOWN_RISKY) {
+            lines.push(`  - *…and ${result.riskyFiles.length - MAX_SHOWN_RISKY} more*`);
         }
     }
     // 4. Conventional title check
@@ -33482,7 +33721,7 @@ function generatePRReportMarkdown(result) {
     }
     lines.push('');
     lines.push('---');
-    lines.push('*Automated review by MaintainerKit · Maintainers stay in control*');
+    lines.push('*Automated review by Tendr · Maintainers stay in control*');
     return lines.join('\n');
 }
 
@@ -33647,8 +33886,10 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.getLatestReleaseOrTag = getLatestReleaseOrTag;
 exports.collectMergedPRs = collectMergedPRs;
 const logger_1 = __nccwpck_require__(6618);
+const semver_1 = __nccwpck_require__(2161);
+const SEMVER_TAG_REGEX = /^v?\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;
 /**
- * Finds the latest published release or tag.
+ * Finds the latest published release or tag, ignoring moving major tags (e.g. v1).
  */
 async function getLatestReleaseOrTag(client) {
     // 1. Try getLatestRelease
@@ -33657,7 +33898,7 @@ async function getLatestReleaseOrTag(client) {
             owner: client.owner,
             repo: client.repo,
         });
-        if (res.data) {
+        if (res.data && res.data.tag_name && SEMVER_TAG_REGEX.test(res.data.tag_name)) {
             return {
                 tagName: res.data.tag_name,
                 publishedAt: res.data.published_at || null,
@@ -33670,15 +33911,26 @@ async function getLatestReleaseOrTag(client) {
             logger_1.logger.warn(`Failed to fetch latest release: ${String(err)}`);
         }
     }
-    // 2. Fall back to listTags
+    // 2. Fall back to listTags (paginate up to 200 tags, filter strictly by semver)
     try {
-        const tags = await client.octokit.rest.repos.listTags({
-            owner: client.owner,
-            repo: client.repo,
-            per_page: 1,
-        });
-        if (tags.data.length > 0) {
-            const latestTag = tags.data[0];
+        const allTags = [];
+        for (let page = 1; page <= 2; page++) {
+            const tagsRes = await client.octokit.rest.repos.listTags({
+                owner: client.owner,
+                repo: client.repo,
+                per_page: 100,
+                page,
+            });
+            const tags = tagsRes.data || [];
+            allTags.push(...tags);
+            if (tags.length < 100)
+                break;
+        }
+        // Keep only true semver tags (v1.0.0, 1.2.3), ignore moving tags like "v1"
+        const semverTags = allTags.filter((t) => SEMVER_TAG_REGEX.test(t.name));
+        if (semverTags.length > 0) {
+            semverTags.sort((a, b) => (0, semver_1.compareSemver)(b.name, a.name));
+            const latestTag = semverTags[0];
             let commitDate = null;
             try {
                 const commit = await client.octokit.rest.repos.getCommit({
@@ -33704,49 +33956,147 @@ async function getLatestReleaseOrTag(client) {
 }
 /**
  * Collects all merged PRs since the latest release date.
+ * Automatically stops paginating once PR updated_at is older than sinceDate.
  */
-async function collectMergedPRs(client, sinceDate) {
+async function collectMergedPRs(client, sinceDate, options) {
     logger_1.logger.info(`Collecting merged PRs${sinceDate ? ` since ${sinceDate}` : ' across all history'}...`);
-    const closedPRs = await client.octokit.paginate(client.octokit.rest.pulls.list, {
-        owner: client.owner,
-        repo: client.repo,
-        state: 'closed',
-        sort: 'updated',
-        direction: 'desc',
-        per_page: 100,
-    });
     const sinceTime = sinceDate ? new Date(sinceDate).getTime() : 0;
     const releasePRs = [];
+    const authorPRMap = new Map();
+    const authorTypeMap = new Map();
     const historicalAuthors = new Set();
-    for (const raw of closedPRs) {
-        if (!raw.merged_at)
+    const isBotUser = (login, type) => {
+        return type === 'Bot' || Boolean(login && login.endsWith('[bot]'));
+    };
+    let page = 1;
+    const MAX_PAGES = 10;
+    let reachedEndOfWindow = false;
+    while (page <= MAX_PAGES && !reachedEndOfWindow) {
+        let closedPRs = []; // eslint-disable-line @typescript-eslint/no-explicit-any
+        if (typeof client.octokit.rest?.pulls?.list === 'function') {
+            try {
+                const res = await client.octokit.rest.pulls.list({
+                    owner: client.owner,
+                    repo: client.repo,
+                    state: 'closed',
+                    sort: 'updated',
+                    direction: 'desc',
+                    per_page: 100,
+                    page,
+                });
+                if (res && Array.isArray(res.data)) {
+                    closedPRs = res.data;
+                }
+            }
+            catch (err) {
+                logger_1.logger.warn(`Failed to fetch closed PRs page ${page}: ${String(err)}`);
+            }
+        }
+        // Fallback if pulls.list was not mocked or returned nothing on first page, but paginate is mocked
+        if (page === 1 && closedPRs.length === 0 && typeof client.octokit.paginate === 'function') {
+            try {
+                const paginated = await client.octokit.paginate(client.octokit.rest?.pulls?.list || 'pulls.list', {
+                    owner: client.owner,
+                    repo: client.repo,
+                    state: 'closed',
+                    sort: 'updated',
+                    direction: 'desc',
+                    per_page: 100,
+                });
+                if (Array.isArray(paginated) && paginated.length > 0) {
+                    closedPRs = paginated;
+                    reachedEndOfWindow = true;
+                }
+            }
+            catch {
+                // ignore
+            }
+        }
+        if (closedPRs.length === 0)
+            break;
+        for (const raw of closedPRs) {
+            const author = raw.user?.login || 'unknown';
+            const userType = raw.user?.type || 'User';
+            const isBot = isBotUser(author, userType);
+            // Early stop optimization: pulls are sorted by updated desc.
+            // If updated_at is older than sinceDate, no subsequent PR was updated or merged after sinceDate.
+            if (sinceTime > 0 && raw.updated_at) {
+                const updatedTime = new Date(raw.updated_at).getTime();
+                if (updatedTime < sinceTime) {
+                    reachedEndOfWindow = true;
+                    break;
+                }
+            }
+            if (!raw.merged_at)
+                continue;
+            const mergedTime = new Date(raw.merged_at).getTime();
+            const labels = (raw.labels || []).map((l) => l.name);
+            if (sinceTime === 0 || mergedTime > sinceTime) {
+                if (options?.excludeBots && isBot) {
+                    // Drop bot PR entirely from release notes if excludeBots is true
+                    continue;
+                }
+                releasePRs.push({
+                    number: raw.number,
+                    title: raw.title,
+                    body: raw.body || '',
+                    author,
+                    mergedAt: raw.merged_at,
+                    labels,
+                });
+                if (!authorPRMap.has(author)) {
+                    authorPRMap.set(author, raw.number);
+                    authorTypeMap.set(author, userType);
+                }
+            }
+            else {
+                historicalAuthors.add(author);
+            }
+        }
+        if (closedPRs.length < 100)
+            break;
+        page++;
+    }
+    // Reverse to make chronological
+    releasePRs.reverse();
+    // Determine first-time contributors (exclude bot accounts)
+    const firstTimeContributors = [];
+    const candidateAuthors = Array.from(authorPRMap.entries());
+    for (const [author, prNumber] of candidateAuthors) {
+        const userType = authorTypeMap.get(author);
+        if (isBotUser(author, userType) || author === 'unknown') {
             continue;
-        const mergedTime = new Date(raw.merged_at).getTime();
-        const author = raw.user?.login || 'unknown';
-        const labels = (raw.labels || []).map((l) => l.name);
-        if (mergedTime > sinceTime) {
-            releasePRs.push({
-                number: raw.number,
-                title: raw.title,
-                body: raw.body || '',
-                author,
-                mergedAt: raw.merged_at,
-                labels,
-            });
+        }
+        if (!sinceDate) {
+            firstTimeContributors.push({ author, prNumber });
         }
         else {
-            historicalAuthors.add(author);
-        }
-    }
-    // Reverse so they are chronological
-    releasePRs.reverse();
-    // Determine new contributors
-    const firstTimeContributors = [];
-    const seenNewInRelease = new Set();
-    for (const pr of releasePRs) {
-        if (!historicalAuthors.has(pr.author) && !seenNewInRelease.has(pr.author) && pr.author !== 'unknown') {
-            seenNewInRelease.add(pr.author);
-            firstTimeContributors.push({ author: pr.author, prNumber: pr.number });
+            // If historicalAuthors already recorded author from earlier closed PR, skip
+            if (historicalAuthors.has(author)) {
+                continue;
+            }
+            // Check prior commits before sinceDate for this author (cap lookups to prevent rate limit)
+            if (firstTimeContributors.length < 50 && client.octokit?.rest?.repos?.listCommits) {
+                try {
+                    const priorCommits = await client.octokit.rest.repos.listCommits({
+                        owner: client.owner,
+                        repo: client.repo,
+                        author,
+                        until: sinceDate,
+                        per_page: 1,
+                    });
+                    if (priorCommits.data && priorCommits.data.length === 0) {
+                        firstTimeContributors.push({ author, prNumber });
+                    }
+                }
+                catch {
+                    // If commit lookup fails, assume first-time contributor if not in historicalAuthors
+                    firstTimeContributors.push({ author, prNumber });
+                }
+            }
+            else {
+                firstTimeContributors.push({ author, prNumber });
+            }
         }
     }
     logger_1.logger.info(`Collected ${releasePRs.length} merged PR(s) and ${firstTimeContributors.length} new contributor(s).`);
@@ -33875,6 +34225,7 @@ function generateReleaseNotes(options) {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.parseSemver = parseSemver;
 exports.bumpVersion = bumpVersion;
+exports.compareSemver = compareSemver;
 exports.determineBumpType = determineBumpType;
 /**
  * Parses a semantic version string (e.g. "v1.2.3" or "2.0.1").
@@ -33909,6 +34260,34 @@ function bumpVersion(currentVersionStr, bumpType) {
         return `${prefix}${parsed.major}.${parsed.minor + 1}.0`;
     }
     return `${prefix}${parsed.major}.${parsed.minor}.${parsed.patch + 1}`;
+}
+/**
+ * Compares two semantic version strings.
+ * Returns positive if a > b, negative if a < b, 0 if equal.
+ * Non-prereleases are prioritized over prereleases when versions are equal.
+ */
+function compareSemver(a, b) {
+    const parsedA = parseSemver(a);
+    const parsedB = parseSemver(b);
+    if (!parsedA && !parsedB)
+        return a.localeCompare(b);
+    if (!parsedA)
+        return -1;
+    if (!parsedB)
+        return 1;
+    if (parsedA.major !== parsedB.major)
+        return parsedA.major - parsedB.major;
+    if (parsedA.minor !== parsedB.minor)
+        return parsedA.minor - parsedB.minor;
+    if (parsedA.patch !== parsedB.patch)
+        return parsedA.patch - parsedB.patch;
+    const isPreA = /-[0-9A-Za-z.-]+$/.test(a);
+    const isPreB = /-[0-9A-Za-z.-]+$/.test(b);
+    if (isPreA && !isPreB)
+        return -1;
+    if (!isPreA && isPreB)
+        return 1;
+    return 0;
 }
 /**
  * Determines semver bump type based on PRs:
@@ -34122,23 +34501,38 @@ const summary_1 = __nccwpck_require__(7724);
 async function detectDuplicateIssues(options) {
     const { client, currentIssueNumber, title, body, threshold, maxSuggestions, includeClosedDays, } = options;
     logger_1.logger.info(`Checking duplicates for issue #${currentIssueNumber} (threshold: ${threshold})`);
-    let sinceDate;
+    const MAX_CANDIDATE_ISSUES = 1000;
+    // 1. Fetch open issues (all open issues, no 'since' filter)
+    let candidateIssues = []; // eslint-disable-line @typescript-eslint/no-explicit-any
+    try {
+        const openIssues = await client.listIssues({
+            state: 'open',
+        });
+        candidateIssues.push(...openIssues);
+    }
+    catch (err) {
+        logger_1.logger.warn(`Failed to retrieve open issues for duplicate check: ${String(err)}`);
+    }
+    // 2. Fetch closed issues within configurable window only if includeClosedDays > 0
     if (includeClosedDays > 0) {
         const d = new Date();
         d.setDate(d.getDate() - includeClosedDays);
-        sinceDate = d.toISOString();
+        const sinceDate = d.toISOString();
+        try {
+            const closedIssues = await client.listIssues({
+                state: 'closed',
+                since: sinceDate,
+            });
+            candidateIssues.push(...closedIssues);
+        }
+        catch (err) {
+            logger_1.logger.warn(`Failed to retrieve closed issues for duplicate check: ${String(err)}`);
+        }
     }
-    // Fetch candidate issues
-    let candidateIssues = []; // eslint-disable-line @typescript-eslint/no-explicit-any
-    try {
-        candidateIssues = await client.listIssues({
-            state: 'all',
-            since: sinceDate,
-        });
-    }
-    catch (err) {
-        logger_1.logger.warn(`Failed to retrieve candidate issues for duplicate check: ${String(err)}`);
-        return [];
+    // Cap candidate issues to prevent API exhaustion on massive repos
+    if (candidateIssues.length > MAX_CANDIDATE_ISSUES) {
+        logger_1.logger.info(`Candidate issues (${candidateIssues.length}) exceeded limit; capping at ${MAX_CANDIDATE_ISSUES} to conserve resources.`);
+        candidateIssues = candidateIssues.slice(0, MAX_CANDIDATE_ISSUES);
     }
     // Filter out PRs and current issue
     const issueMap = new Map();
@@ -34148,6 +34542,8 @@ async function detectDuplicateIssues(options) {
         if (candidate.pull_request)
             continue;
         if (candidate.number === currentIssueNumber)
+            continue;
+        if (issueMap.has(candidate.number))
             continue;
         issueMap.set(candidate.number, {
             title: candidate.title || '',
@@ -34181,7 +34577,7 @@ async function detectDuplicateIssues(options) {
         const commentBody = [
             '### 🔍 Potential Duplicate Issues Detected',
             '',
-            `MaintainerKit detected that this issue may be related to or a duplicate of the following existing issues:`,
+            `Tendr detected that this issue may be related to or a duplicate of the following existing issues:`,
             '',
             ...matches.map((m) => {
                 const cleanTitle = (0, client_1.sanitizeUserText)(m.title);
@@ -34192,7 +34588,7 @@ async function detectDuplicateIssues(options) {
             '',
             'Please check if your problem or suggestion is already covered in these issues.',
             '',
-            '> *Note: MaintainerKit never closes issues automatically. A human maintainer will review this issue.*',
+            '> *Note: Tendr never closes issues automatically. A human maintainer will review this issue.*',
         ].join('\n');
         await (0, comments_1.postOrUpdateStickyComment)(client, currentIssueNumber, comments_1.COMMENT_MARKERS.DUPLICATE_INFO, commentBody);
         await client.addLabels(currentIssueNumber, ['possible-duplicate']);
@@ -34232,12 +34628,16 @@ function escapeRegex(literal) {
 function matchesRule(rule, text) {
     // Safety guard against massive payloads causing ReDoS
     const safeText = text.slice(0, 50000).toLowerCase();
-    // 1. Keyword check (case-insensitive substring)
+    // 1. Keyword check (case-insensitive with word boundaries)
     for (const kw of rule.keywords) {
         if (!kw)
             continue;
         const cleanKw = kw.trim().toLowerCase();
-        if (cleanKw.length > 0 && safeText.includes(cleanKw)) {
+        if (cleanKw.length === 0)
+            continue;
+        const escaped = escapeRegex(cleanKw);
+        const kwRegex = new RegExp(`(^|\\W)${escaped}($|\\W)`, 'i');
+        if (kwRegex.test(safeText)) {
             return true;
         }
     }
@@ -34336,23 +34736,32 @@ function isContentEmptyOrPlaceholder(content) {
  * Normalizes section titles for comparison (e.g. "Steps to reproduce" -> "steps to reproduce")
  */
 function normalizeTitle(title) {
-    return title
+    const norm = title
         .toLowerCase()
         .replace(/[^\w\s]/g, ' ')
         .replace(/\s+/g, ' ')
         .trim();
+    // Ensure it contains letters or numbers
+    if (!/[a-z0-9]/.test(norm)) {
+        return '';
+    }
+    return norm;
 }
 /**
  * Extracts sections from markdown body formatted with headings (### Header)
  * or label lines (Header: value).
  */
-function extractSections(markdown) {
+function extractSections(markdown, validSectionNames) {
     const sections = new Map();
     if (!markdown)
         return sections;
+    const validNormNames = validSectionNames
+        ? new Set(validSectionNames.map((n) => normalizeTitle(n)).filter(Boolean))
+        : null;
     const lines = markdown.split(/\r?\n/);
     let currentHeader = null;
     let currentLines = [];
+    let inCodeFence = false;
     const flush = () => {
         if (currentHeader !== null) {
             const existing = sections.get(currentHeader) || '';
@@ -34362,22 +34771,53 @@ function extractSections(markdown) {
         currentLines = [];
     };
     for (const line of lines) {
+        const trimmed = line.trim();
+        // 0. Track code fences (``` or ~~~)
+        if (/^(```|~~~)/.test(trimmed)) {
+            inCodeFence = !inCodeFence;
+            if (currentHeader !== null) {
+                currentLines.push(line);
+            }
+            continue;
+        }
+        if (inCodeFence) {
+            if (currentHeader !== null) {
+                currentLines.push(line);
+            }
+            continue;
+        }
         // 1. Heading check: e.g. # Title, ## Title, ### Title
         const headingMatch = line.match(/^#{1,6}\s+(.+)$/);
         if (headingMatch) {
-            flush();
-            currentHeader = normalizeTitle(headingMatch[1]);
-            continue;
+            const norm = normalizeTitle(headingMatch[1]);
+            if (norm.length > 0) {
+                flush();
+                currentHeader = norm;
+                continue;
+            }
         }
         // 2. Bold header or form label check: e.g. **Steps to reproduce:** or Steps to reproduce:
-        const labelMatch = line.match(/^[*_]{0,2}([\w\s/-]{3,50})[*_]{0,2}:\s*(.*)$/);
-        if (labelMatch) {
-            flush();
-            currentHeader = normalizeTitle(labelMatch[1]);
-            if (labelMatch[2].trim()) {
-                currentLines.push(labelMatch[2].trim());
+        // Disallow URL schemes (e.g. https://)
+        if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) {
+            const labelMatch = line.match(/^[*_]{0,2}([\w\s/-]{3,50})[*_]{0,2}:\s*(.*)$/);
+            if (labelMatch) {
+                const candidateNorm = normalizeTitle(labelMatch[1]);
+                // Only treat as section header if it matches configured section names
+                const isValid = validNormNames === null ||
+                    validNormNames.has(candidateNorm) ||
+                    Array.from(validNormNames).some((v) => v === candidateNorm ||
+                        (v.length >= 4 &&
+                            candidateNorm.length >= 4 &&
+                            (v.includes(candidateNorm) || candidateNorm.includes(v))));
+                if (isValid && candidateNorm.length > 0) {
+                    flush();
+                    currentHeader = candidateNorm;
+                    if (labelMatch[2].trim()) {
+                        currentLines.push(labelMatch[2].trim());
+                    }
+                    continue;
+                }
             }
-            continue;
         }
         if (currentHeader !== null) {
             currentLines.push(line);
@@ -34394,16 +34834,28 @@ function checkMissingRequiredSections(body, requiredSections) {
         return [];
     }
     const text = body || '';
-    const sections = extractSections(text);
+    const sections = extractSections(text, requiredSections);
     const missing = [];
     for (const required of requiredSections) {
         const normRequired = normalizeTitle(required);
+        if (!normRequired)
+            continue;
         let matchedContent = null;
-        // Direct match or partial match on header title
+        // 1. Exact match on header title
         for (const [header, content] of sections.entries()) {
-            if (header.includes(normRequired) || normRequired.includes(header)) {
+            if (header === normRequired) {
                 matchedContent = content;
                 break;
+            }
+        }
+        // 2. Fallback partial match only when both strings have length >= 4
+        if (matchedContent === null && normRequired.length >= 4) {
+            for (const [header, content] of sections.entries()) {
+                if (header.length >= 4 &&
+                    (header.includes(normRequired) || normRequired.includes(header))) {
+                    matchedContent = content;
+                    break;
+                }
             }
         }
         if (matchedContent === null) {
@@ -34436,6 +34888,19 @@ async function processRequiredInfo(params) {
         }
     }
     if (activeRequiredSections.size === 0) {
+        const existingComment = await (0, comments_1.findCommentByMarker)(client, issueNumber, comments_1.COMMENT_MARKERS.TRIAGE_INFO);
+        if (existingComment || lowerLabels.includes(needsInfoLabel.toLowerCase())) {
+            logger_1.logger.info(`Issue #${issueNumber} no longer requires required-info. Cleaning up ${needsInfoLabel} and updating status comment.`);
+            await client.removeLabel(issueNumber, needsInfoLabel);
+            if (existingComment) {
+                const resolvedBody = [
+                    '### ✅ Information Complete',
+                    '',
+                    'All required information provided or no longer required. Thank you!',
+                ].join('\n');
+                await (0, comments_1.postOrUpdateStickyComment)(client, issueNumber, comments_1.COMMENT_MARKERS.TRIAGE_INFO, resolvedBody);
+            }
+        }
         return { missingSections: [], passed: true };
     }
     const missing = checkMissingRequiredSections(body, Array.from(activeRequiredSections));
@@ -34609,7 +35074,7 @@ class StepSummaryManager {
             // In local tests or environments where GITHUB_STEP_SUMMARY is not set, skip writing gracefully
             return;
         }
-        core.summary.addHeading('MaintainerKit Summary', 2);
+        core.summary.addHeading('Tendr Run Summary', 2);
         if (this.dryRun) {
             core.summary.addRaw('> ⚠️ **DRY-RUN MODE ACTIVE**: No changes were written to GitHub. The actions below are previews of what would have run.\n\n');
         }

@@ -40,23 +40,42 @@ export async function detectDuplicateIssues(
 
   logger.info(`Checking duplicates for issue #${currentIssueNumber} (threshold: ${threshold})`);
 
-  let sinceDate: string | undefined;
+  const MAX_CANDIDATE_ISSUES = 1000;
+
+  // 1. Fetch open issues (all open issues, no 'since' filter)
+  let candidateIssues: any[] = []; // eslint-disable-line @typescript-eslint/no-explicit-any
+  try {
+    const openIssues = await client.listIssues({
+      state: 'open',
+    });
+    candidateIssues.push(...openIssues);
+  } catch (err: unknown) {
+    logger.warn(`Failed to retrieve open issues for duplicate check: ${String(err)}`);
+  }
+
+  // 2. Fetch closed issues within configurable window only if includeClosedDays > 0
   if (includeClosedDays > 0) {
     const d = new Date();
     d.setDate(d.getDate() - includeClosedDays);
-    sinceDate = d.toISOString();
+    const sinceDate = d.toISOString();
+
+    try {
+      const closedIssues = await client.listIssues({
+        state: 'closed',
+        since: sinceDate,
+      });
+      candidateIssues.push(...closedIssues);
+    } catch (err: unknown) {
+      logger.warn(`Failed to retrieve closed issues for duplicate check: ${String(err)}`);
+    }
   }
 
-  // Fetch candidate issues
-  let candidateIssues: any[] = []; // eslint-disable-line @typescript-eslint/no-explicit-any
-  try {
-    candidateIssues = await client.listIssues({
-      state: 'all',
-      since: sinceDate,
-    });
-  } catch (err: unknown) {
-    logger.warn(`Failed to retrieve candidate issues for duplicate check: ${String(err)}`);
-    return [];
+  // Cap candidate issues to prevent API exhaustion on massive repos
+  if (candidateIssues.length > MAX_CANDIDATE_ISSUES) {
+    logger.info(
+      `Candidate issues (${candidateIssues.length}) exceeded limit; capping at ${MAX_CANDIDATE_ISSUES} to conserve resources.`,
+    );
+    candidateIssues = candidateIssues.slice(0, MAX_CANDIDATE_ISSUES);
   }
 
   // Filter out PRs and current issue
@@ -67,6 +86,7 @@ export async function detectDuplicateIssues(
     // GitHub API returns PRs in issues endpoint if 'pull_request' field is present
     if (candidate.pull_request) continue;
     if (candidate.number === currentIssueNumber) continue;
+    if (issueMap.has(candidate.number)) continue;
 
     issueMap.set(candidate.number, {
       title: candidate.title || '',
@@ -108,7 +128,7 @@ export async function detectDuplicateIssues(
     const commentBody = [
       '### 🔍 Potential Duplicate Issues Detected',
       '',
-      `MaintainerKit detected that this issue may be related to or a duplicate of the following existing issues:`,
+      `Tendr detected that this issue may be related to or a duplicate of the following existing issues:`,
       '',
       ...matches.map((m) => {
         const cleanTitle = sanitizeUserText(m.title);
@@ -119,7 +139,7 @@ export async function detectDuplicateIssues(
       '',
       'Please check if your problem or suggestion is already covered in these issues.',
       '',
-      '> *Note: MaintainerKit never closes issues automatically. A human maintainer will review this issue.*',
+      '> *Note: Tendr never closes issues automatically. A human maintainer will review this issue.*',
     ].join('\n');
 
     await postOrUpdateStickyComment(

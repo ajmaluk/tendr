@@ -22,7 +22,18 @@ export const TriageConfigSchema = z.object({
   labels: z.array(LabelRuleSchema).default([
     {
       label: 'bug',
-      keywords: ['crash', 'exception', 'traceback', "doesn't work", 'regression'],
+      keywords: [
+        'crash',
+        'exception',
+        'traceback',
+        "doesn't work",
+        'regression',
+        'broken',
+        'not working',
+        'error',
+        'fails',
+        'failure',
+      ],
       patterns: [],
     },
     {
@@ -71,6 +82,7 @@ export const ReleaseCategorySchema = z.object({
 });
 
 export const ReleaseConfigSchema = z.object({
+  excludeBots: z.boolean().default(false),
   categories: z.array(ReleaseCategorySchema).default([
     { title: 'Breaking Changes', labels: ['breaking'], types: [] },
     { title: 'Features', labels: ['enhancement'], types: ['feat'] },
@@ -84,13 +96,16 @@ export const ReleaseConfigSchema = z.object({
   ]),
 });
 
-export const MaintainerKitConfigSchema = z.object({
+export const TendrConfigSchema = z.object({
   triage: TriageConfigSchema.default({}),
   pullRequests: PullRequestsConfigSchema.default({}),
   release: ReleaseConfigSchema.default({}),
 });
 
-export type MaintainerKitConfig = z.infer<typeof MaintainerKitConfigSchema>;
+export const MaintainerKitConfigSchema = TendrConfigSchema;
+
+export type TendrConfig = z.infer<typeof TendrConfigSchema>;
+export type MaintainerKitConfig = TendrConfig;
 export type TriageConfig = z.infer<typeof TriageConfigSchema>;
 export type PullRequestsConfig = z.infer<typeof PullRequestsConfigSchema>;
 export type ReleaseConfig = z.infer<typeof ReleaseConfigSchema>;
@@ -130,7 +145,7 @@ export function parseConfig(rawYamlObject: unknown): MaintainerKitConfig {
       .map((issue) => `  - Key: "${issue.path.join('.')}" | Expected: ${issue.message}`)
       .join('\n');
     throw new Error(
-      `Invalid MaintainerKit configuration in config file:\n${errorDetails}\nPlease review the configuration reference in docs/configuration.md.`,
+      `Invalid Tendr (MaintainerKit) configuration in config file:\n${errorDetails}\nPlease review the configuration reference in docs/configuration.md.`,
     );
   }
 

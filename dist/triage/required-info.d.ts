@@ -16,7 +16,7 @@ export declare function isContentEmptyOrPlaceholder(content: string): boolean;
  * Extracts sections from markdown body formatted with headings (### Header)
  * or label lines (Header: value).
  */
-export declare function extractSections(markdown: string): Map<string, string>;
+export declare function extractSections(markdown: string, validSectionNames?: string[]): Map<string, string>;
 /**
  * Determines which required sections are missing or contain only placeholders.
  */

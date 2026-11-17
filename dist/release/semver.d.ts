@@ -14,6 +14,12 @@ export declare function parseSemver(versionStr: string): SemverVersion | null;
  */
 export declare function bumpVersion(currentVersionStr: string | null | undefined, bumpType: SemverBumpType): string;
 /**
+ * Compares two semantic version strings.
+ * Returns positive if a > b, negative if a < b, 0 if equal.
+ * Non-prereleases are prioritized over prereleases when versions are equal.
+ */
+export declare function compareSemver(a: string, b: string): number;
+/**
  * Determines semver bump type based on PRs:
  * - Any breaking change -> major
  * - Any feat -> minor

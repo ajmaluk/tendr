@@ -31,7 +31,7 @@ export interface PRAnalysisResult {
 }
 
 const LINKED_ISSUE_REGEX =
-  /\b(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+(?:#\d+|https?:\/\/github\.com\/[^/\s]+\/[^/\s]+\/(?:issues|pull)\/\d+)/i;
+  /\b(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved):?\s+(?:(?:[a-z0-9_.-]+\/[a-z0-9_.-]+)?#\d+|https?:\/\/github\.com\/[^/\s]+\/[^/\s]+\/(?:issues|pull)\/\d+)/i;
 
 /**
  * Checks if a filename represents a source code file.

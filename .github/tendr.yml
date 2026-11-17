@@ -1,0 +1,31 @@
+# .github/tendr.yml
+triage:
+  labels:
+    - label: bug
+      keywords: ["crash", "exception", "traceback", "doesn't work", "regression", "broken", "not working", "error", "fails", "failure"]
+    - label: question
+      keywords: ["how do i", "how to", "is it possible"]
+    - label: enhancement
+      keywords: ["feature request", "would be nice", "please add"]
+  required-info:
+    bug: ["version", "steps to reproduce", "expected", "actual"]
+  needs-info-label: needs-info
+  duplicates:
+    enabled: true
+    threshold: 0.55
+    max-suggestions: 3
+    include-closed-days: 180
+pull-requests:
+  size-thresholds: { xs: 10, s: 50, m: 250, l: 1000 }
+  test-globs: ["**/*.test.*", "**/*.spec.*", "tests/**", "__tests__/**"]
+  docs-globs: ["README.md", "docs/**", "CHANGELOG.md"]
+  risky-globs: ["**/auth/**", "**/migrations/**", ".github/workflows/**", "package-lock.json"]
+  require-conventional-title: true
+  require-linked-issue: false
+release:
+  categories:
+    - { title: "Breaking Changes", labels: ["breaking"] }
+    - { title: "Features", labels: ["enhancement"], types: ["feat"] }
+    - { title: "Bug Fixes", labels: ["bug"], types: ["fix"] }
+    - { title: "Documentation", types: ["docs"] }
+    - { title: "Maintenance", types: ["chore", "refactor", "ci", "build", "test"] }

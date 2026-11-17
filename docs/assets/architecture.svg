@@ -1,0 +1,118 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 520" width="100%" height="520" style="background:#0d1117;border-radius:12px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#8b5cf6;stop-opacity:0.12" />
+      <stop offset="100%" style="stop-color:#3b82f6;stop-opacity:0.04" />
+    </linearGradient>
+    <filter id="shadow" x="-5%" y="-5%" width="110%" height="110%">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#000" flood-opacity="0.3"/>
+    </filter>
+  </defs>
+
+  <!-- Frame Background -->
+  <rect x="0" y="0" width="960" height="520" rx="12" fill="#0d1117" stroke="#30363d" stroke-width="1.5"/>
+  <rect x="15" y="15" width="930" height="490" rx="8" fill="url(#bgGrad)"/>
+
+  <!-- Window Header -->
+  <circle cx="36" cy="36" r="5" fill="#f87171"/>
+  <circle cx="52" cy="36" r="5" fill="#fbbf24"/>
+  <circle cx="68" cy="36" r="5" fill="#34d399"/>
+  <text x="92" y="40" fill="#8b949e" font-size="12" font-weight="600">Tendr · System Architecture &amp; Event Pipeline</text>
+
+  <!-- Level 1: Triggers / Inputs -->
+  <g transform="translate(40, 65)">
+    <rect width="880" height="60" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+    <text x="20" y="24" fill="#8b949e" font-size="11" font-weight="700" letter-spacing="1">EVENT TRIGGERS</text>
+    
+    <!-- Trigger Pill 1 -->
+    <rect x="20" y="30" width="220" height="22" rx="4" fill="#238636" fill-opacity="0.2" stroke="#2ea043" stroke-width="0.8"/>
+    <text x="30" y="45" fill="#7ee787" font-size="11" font-weight="600">issues (opened, edited)</text>
+    
+    <!-- Trigger Pill 2 -->
+    <rect x="260" y="30" width="310" height="22" rx="4" fill="#1f6feb" fill-opacity="0.2" stroke="#388bfd" stroke-width="0.8"/>
+    <text x="270" y="45" fill="#79c0ff" font-size="11" font-weight="600">pull_request / target (opened, synchronize)</text>
+    
+    <!-- Trigger Pill 3 -->
+    <rect x="590" y="30" width="260" height="22" rx="4" fill="#8957e5" fill-opacity="0.2" stroke="#a371f7" stroke-width="0.8"/>
+    <text x="600" y="45" fill="#d2a8ff" font-size="11" font-weight="600">workflow_dispatch / push tags</text>
+  </g>
+
+  <!-- Connectors from Level 1 to Core -->
+  <line x1="480" y1="125" x2="480" y2="155" stroke="#58a6ff" stroke-width="2" stroke-dasharray="4"/>
+  <polygon points="476,155 484,155 480,162" fill="#58a6ff"/>
+
+  <!-- Level 2: Core Orchestrator -->
+  <g transform="translate(180, 165)">
+    <rect width="600" height="85" rx="8" fill="#1c2128" stroke="#58a6ff" stroke-width="1.5" filter="url(#shadow)"/>
+    <text x="20" y="25" fill="#58a6ff" font-size="13" font-weight="700">src/main.ts · Orchestrator &amp; Security Boundary</text>
+    
+    <g transform="translate(20, 36)">
+      <rect width="170" height="34" rx="4" fill="#161b22" stroke="#30363d"/>
+      <text x="12" y="16" fill="#c9d1d9" font-size="11" font-weight="600">Token Masking</text>
+      <text x="12" y="28" fill="#8b949e" font-size="9">core.setSecret()</text>
+    </g>
+
+    <g transform="translate(205, 36)">
+      <rect width="180" height="34" rx="4" fill="#161b22" stroke="#30363d"/>
+      <text x="12" y="16" fill="#c9d1d9" font-size="11" font-weight="600">Config Loader</text>
+      <text x="12" y="28" fill="#8b949e" font-size="9">Zod validation &amp; defaults</text>
+    </g>
+
+    <g transform="translate(400, 36)">
+      <rect width="180" height="34" rx="4" fill="#161b22" stroke="#30363d"/>
+      <text x="12" y="16" fill="#c9d1d9" font-size="11" font-weight="600">GitHub API Client</text>
+      <text x="12" y="28" fill="#8b949e" font-size="9">Dry-run guard &amp; 429 retries</text>
+    </g>
+  </g>
+
+  <!-- Connectors from Core to 3 Feature Domains -->
+  <line x1="280" y1="250" x2="180" y2="285" stroke="#30363d" stroke-width="2"/>
+  <line x1="480" y1="250" x2="480" y2="285" stroke="#30363d" stroke-width="2"/>
+  <line x1="680" y1="250" x2="780" y2="285" stroke="#30363d" stroke-width="2"/>
+
+  <!-- Level 3: Three Engines -->
+  <!-- Feature A: Issue Triage -->
+  <g transform="translate(40, 285)">
+    <rect width="270" height="150" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+    <text x="16" y="24" fill="#ff7b72" font-size="13" font-weight="700">Feature A: Issue Triage</text>
+    <text x="16" y="44" fill="#8b949e" font-size="10">src/triage/ · Pure rules &amp; ML-free search</text>
+    
+    <text x="16" y="68" fill="#c9d1d9" font-size="11">• Auto-Labeler (Regex &amp; Keywords)</text>
+    <text x="16" y="88" fill="#c9d1d9" font-size="11">• Required-Info Markdown Parser</text>
+    <text x="16" y="108" fill="#c9d1d9" font-size="11">• Placeholder detector (N/A, empty)</text>
+    <text x="16" y="128" fill="#c9d1d9" font-size="11">• In-memory TF-IDF Cosine Similarity</text>
+  </g>
+
+  <!-- Feature B: PR Analysis -->
+  <g transform="translate(345, 285)">
+    <rect width="270" height="150" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+    <text x="16" y="24" fill="#58a6ff" font-size="13" font-weight="700">Feature B: PR Analysis</text>
+    <text x="16" y="44" fill="#8b949e" font-size="10">src/pr/ · Factual sticky reporting</text>
+    
+    <text x="16" y="68" fill="#c9d1d9" font-size="11">• Size Calculator (XS to XL thresholds)</text>
+    <text x="16" y="88" fill="#c9d1d9" font-size="11">• Test &amp; Documentation Checks</text>
+    <text x="16" y="108" fill="#c9d1d9" font-size="11">• Risky Paths Glob Detection</text>
+    <text x="16" y="128" fill="#c9d1d9" font-size="11">• Conventional Commits Validator</text>
+  </g>
+
+  <!-- Feature C: Release Drafting -->
+  <g transform="translate(650, 285)">
+    <rect width="270" height="150" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+    <text x="16" y="24" fill="#d2a8ff" font-size="13" font-weight="700">Feature C: Release Drafting</text>
+    <text x="16" y="44" fill="#8b949e" font-size="10">src/release/ · Grouped changelogs</text>
+    
+    <text x="16" y="68" fill="#c9d1d9" font-size="11">• Merged PR Pagination &amp; History</text>
+    <text x="16" y="88" fill="#c9d1d9" font-size="11">• Label &amp; Conventional Classifier</text>
+    <text x="16" y="108" fill="#c9d1d9" font-size="11">• Semver Bump Calculation (Major/Minor)</text>
+    <text x="16" y="128" fill="#c9d1d9" font-size="11">• Draft Release Creation (Never auto-pub)</text>
+  </g>
+
+  <!-- Level 4: Actions / Outcomes Bar -->
+  <g transform="translate(40, 455)">
+    <rect width="880" height="42" rx="6" fill="#1c2128" stroke="#30363d" stroke-width="1"/>
+    <text x="16" y="26" fill="#8b949e" font-size="11" font-weight="700">IDEMPOTENT OUTPUTS:</text>
+    <text x="170" y="26" fill="#7ee787" font-size="11">Sticky Comments (&lt;!-- maintainerkit:* --&gt;)</text>
+    <text x="430" y="26" fill="#79c0ff" font-size="11">Labels (size/*, bug, needs-info)</text>
+    <text x="660" y="26" fill="#d2a8ff" font-size="11">Draft Releases &amp; GITHUB_STEP_SUMMARY</text>
+  </g>
+</svg>

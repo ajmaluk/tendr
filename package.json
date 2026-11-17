@@ -1,6 +1,6 @@
 {
   "name": "tendr",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Free, open-source GitHub Action for issue triage, pull request analysis, and release drafting",
   "main": "dist/index.js",
   "type": "commonjs",

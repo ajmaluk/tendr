@@ -18,22 +18,61 @@ import { stepSummary } from './util/summary';
 
 export async function run(): Promise<void> {
   try {
-    const token = core.getInput('github-token') || process.env.GITHUB_TOKEN || '';
+    const token =
+      core.getInput('github-token') ||
+      process.env.INPUT_GITHUB_TOKEN ||
+      process.env.GITHUB_TOKEN ||
+      '';
     if (!token) {
       throw new Error('No GitHub token provided. Ensure "github-token" input is set.');
     }
     core.setSecret(token);
 
-    const configPath = core.getInput('config-path') || '.github/maintainerkit.yml';
-    const dryRun = core.getInput('dry-run') === 'true';
-    const featuresInput = core.getInput('features') || 'triage,pull-requests';
-    const releaseTagInput = core.getInput('release-tag') || '';
+    let dryRun = false;
+    const rawDryRun = (
+      core.getInput('dry-run') ||
+      process.env.INPUT_DRY_RUN ||
+      process.env.DRY_RUN ||
+      ''
+    ).trim();
+
+    if (rawDryRun !== '') {
+      const lower = rawDryRun.toLowerCase();
+      if (lower === 'true') {
+        dryRun = true;
+      } else if (lower === 'false') {
+        dryRun = false;
+      } else {
+        const errorMsg = `Invalid value for "dry-run": expected true or false (got "${rawDryRun}").`;
+        logger.error(errorMsg);
+        core.setFailed(errorMsg);
+        return;
+      }
+    }
+
+    const configPath =
+      core.getInput('config-path') ||
+      process.env.INPUT_CONFIG_PATH ||
+      process.env.CONFIG_PATH ||
+      '.github/tendr.yml';
+
+    const featuresInput =
+      core.getInput('features') ||
+      process.env.INPUT_FEATURES ||
+      process.env.FEATURES ||
+      'triage,pull-requests';
+
+    const releaseTagInput =
+      core.getInput('release-tag') ||
+      process.env.INPUT_RELEASE_TAG ||
+      process.env.RELEASE_TAG ||
+      '';
     const enabledFeatures = featuresInput
       .split(',')
       .map((f) => f.trim().toLowerCase())
       .filter(Boolean);
 
-    logger.info(`MaintainerKit initialized (dryRun: ${dryRun}, features: ${enabledFeatures.join(', ')})`);
+    logger.info(`Tendr initialized (dryRun: ${dryRun}, features: ${enabledFeatures.join(', ')})`);
     stepSummary.setDryRun(dryRun);
 
     const client = new GitHubClient({
@@ -67,19 +106,22 @@ export async function run(): Promise<void> {
 
       logger.startGroup(`Triage processing for Issue #${issueNumber}`);
 
-      // 1. Auto-labeling
-      const labelsToAdd = determineLabelsToAdd(config.triage.labels, {
-        title,
-        body,
-        existingLabels,
-      });
+      // 1. Auto-labeling (only on opened; preserve maintainer edits)
+      let labelsToAdd: string[] = [];
+      if (payload.action === 'opened') {
+        labelsToAdd = determineLabelsToAdd(config.triage.labels, {
+          title,
+          body,
+          existingLabels,
+        });
 
-      if (labelsToAdd.length > 0) {
-        logger.info(`Adding labels to #${issueNumber}: ${labelsToAdd.join(', ')}`);
-        await client.addLabels(issueNumber, labelsToAdd);
-        labelsAddedTotal.push(...labelsToAdd);
-      } else {
-        logger.info(`No new labels matched for #${issueNumber}.`);
+        if (labelsToAdd.length > 0) {
+          logger.info(`Adding labels to #${issueNumber}: ${labelsToAdd.join(', ')}`);
+          const applied = await client.addLabels(issueNumber, labelsToAdd);
+          labelsAddedTotal.push(...applied);
+        } else {
+          logger.info(`No new labels matched for #${issueNumber}.`);
+        }
       }
 
       // Combine existing + newly added labels for required-info check
@@ -191,68 +233,83 @@ export async function run(): Promise<void> {
     }
 
     // --- FEATURE C: RELEASE DRAFTING ---
-    const isReleaseEvent =
-      eventName === 'workflow_dispatch' ||
-      (eventName === 'push' && Boolean(payload.ref && payload.ref.startsWith('refs/tags/'))) ||
-      enabledFeatures.includes('release');
+    const releaseEventNames = ['workflow_dispatch', 'schedule', 'release'];
+    const isTagPush =
+      eventName === 'push' && Boolean(payload.ref && payload.ref.startsWith('refs/tags/'));
+    const isReleaseEvent = releaseEventNames.includes(eventName) || isTagPush;
 
-    if (isReleaseEvent && enabledFeatures.includes('release')) {
-      logger.startGroup('Release Drafting');
+    if (enabledFeatures.includes('release')) {
+      if (!isReleaseEvent) {
+        logger.info(`Release drafting skipped: event "${eventName}" is not a release event.`);
+        stepSummary.addItem({
+          type: 'release',
+          title: 'Release drafting skipped',
+          details: `Event "${eventName}" is not a release event (expected workflow_dispatch, tag push, schedule, or release)`,
+          status: 'skipped',
+        });
+      } else {
+        logger.startGroup('Release Drafting');
 
-      // 1. Find latest release or tag
-      const latest = await getLatestReleaseOrTag(client);
-      logger.info(`Latest tag detected: ${latest.tagName || 'none'} (date: ${latest.publishedAt || 'none'})`);
+        // 1. Find latest release or tag
+        const latest = await getLatestReleaseOrTag(client);
+        logger.info(`Latest tag detected: ${latest.tagName || 'none'} (date: ${latest.publishedAt || 'none'})`);
 
-      // 2. Collect merged PRs
-      const { prs, firstTimeContributors } = await collectMergedPRs(client, latest.publishedAt);
-      logger.info(`Collected ${prs.length} merged PRs for release drafting.`);
+        // 2. Collect merged PRs
+        const { prs, firstTimeContributors } = await collectMergedPRs(client, latest.publishedAt, {
+          excludeBots: config.release.excludeBots,
+        });
+        logger.info(`Collected ${prs.length} merged PRs for release drafting.`);
 
-      // 3. Classify PRs
-      const { classified } = classifyPullRequests(prs, config.release);
+        // 3. Classify PRs
+        const { classified } = classifyPullRequests(prs, config.release);
 
-      // 4. Determine semver bump
-      const bumpType = determineBumpType(
-        classified.map((c) => ({
-          isBreaking: c.isBreaking,
-          type: c.conventionalType,
-        })),
-      );
+        // 4. Determine semver bump
+        const bumpType = determineBumpType(
+          classified.map((c) => ({
+            isBreaking: c.isBreaking,
+            type: c.conventionalType,
+          })),
+        );
 
-      const targetVersion = releaseTagInput || bumpVersion(latest.tagName, bumpType);
-      suggestedVersionOutput = targetVersion;
-      logger.info(`Suggested next version: ${targetVersion} (bump type: ${bumpType})`);
+        const targetVersion = releaseTagInput || bumpVersion(latest.tagName, bumpType);
+        suggestedVersionOutput = targetVersion;
+        logger.info(`Suggested next version: ${targetVersion} (bump type: ${bumpType})`);
 
-      // 5. Generate release notes
-      releaseNotesOutput = generateReleaseNotes({
-        version: targetVersion,
-        previousVersion: latest.tagName || undefined,
-        classifiedPRs: classified,
-        config: config.release,
-        firstTimeContributors,
-      });
+        // 5. Generate release notes
+        releaseNotesOutput = generateReleaseNotes({
+          version: targetVersion,
+          previousVersion: latest.tagName || undefined,
+          classifiedPRs: classified,
+          config: config.release,
+          firstTimeContributors,
+        });
 
-      // 6. Create draft release
-      await client.createDraftRelease({
-        tagName: targetVersion,
-        name: `Release ${targetVersion}`,
-        body: releaseNotesOutput,
-      });
+        // 6. Create draft release
+        await client.createDraftRelease({
+          tagName: targetVersion,
+          name: `Release ${targetVersion}`,
+          body: releaseNotesOutput,
+        });
 
-      logger.endGroup();
+        logger.endGroup();
+      }
     }
 
     // Set outputs
-    core.setOutput('labels-added', labelsAddedTotal.join(','));
+    core.setOutput('labels-added', dryRun ? '' : Array.from(new Set(labelsAddedTotal)).join(', '));
     core.setOutput('duplicates-found', JSON.stringify(duplicatesFound));
     core.setOutput('suggested-version', suggestedVersionOutput);
     core.setOutput('release-notes', releaseNotesOutput);
-
-    // Write job summary
-    await stepSummary.write();
   } catch (error: unknown) {
     const errorMsg = error instanceof Error ? error.message : String(error);
     logger.error(errorMsg);
     core.setFailed(errorMsg);
+  } finally {
+    try {
+      await stepSummary.write();
+    } catch (err: unknown) {
+      logger.warn(`Failed to write step summary: ${String(err)}`);
+    }
   }
 }
 

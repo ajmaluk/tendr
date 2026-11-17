@@ -17,11 +17,15 @@ This document outlines the steps to publish Tendr to GitHub Marketplace, launch 
    - Check the box: **"Publish this Action to the GitHub Marketplace"**.
    - Review categories: Select **Code quality** and **Dependency management** (or Project management).
    - Ensure `action.yml` metadata is validated:
-     - Name: `Tendr MaintainerKit`
+     - Name: `Tendr`
      - Description: `<= 125 chars`
      - Icon & Color: set in `action.yml`
+   - Accept the GitHub Marketplace Developer Agreement if publishing for the first time.
 4. **Publish Release**:
    - Click **Publish release**. Tendr is now live on the GitHub Marketplace!
+
+> [!TIP]
+> If a release was created automatically or via workflow CLI, open `https://github.com/ajmaluk/tendr/releases`, click the tag, click **Edit release** (pencil icon), tick **Publish this Action to the GitHub Marketplace**, and click **Update release**.
 
 ---
 

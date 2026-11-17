@@ -42,7 +42,8 @@ export declare class GitHubClient {
     readonly dryRun: boolean;
     constructor(options: GitHubClientOptions);
     /**
-     * Safe API call wrapper with retries on rate limits (403/429)
+     * Safe API call wrapper with retries on rate limits (429 or rate-limited 403s).
+     * Non-rate-limit 403s (e.g. permission errors) fail immediately with clear instructions.
      */
     private requestWithRetry;
     /**

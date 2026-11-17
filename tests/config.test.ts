@@ -51,7 +51,7 @@ describe('Config Schema & Loading', () => {
       },
     };
 
-    expect(() => parseConfig(invalidConfig)).toThrowError(/Invalid MaintainerKit configuration/);
+    expect(() => parseConfig(invalidConfig)).toThrowError(/Invalid.*configuration/i);
   });
 
   it('loadConfig returns default config when file is missing (404/null)', async () => {

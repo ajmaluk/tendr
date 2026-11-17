@@ -1,3 +1,4 @@
+import * as fs from 'fs';
 import * as github from '@actions/github';
 import { logger } from '../util/logger';
 import { stepSummary } from '../util/summary';
@@ -70,7 +71,8 @@ export class GitHubClient {
   }
 
   /**
-   * Safe API call wrapper with retries on rate limits (403/429)
+   * Safe API call wrapper with retries on rate limits (429 or rate-limited 403s).
+   * Non-rate-limit 403s (e.g. permission errors) fail immediately with clear instructions.
    */
   private async requestWithRetry<T>(fn: () => Promise<T>, maxRetries = 3): Promise<T> {
     let attempt = 0;
@@ -81,14 +83,50 @@ export class GitHubClient {
         return await fn();
       } catch (err: unknown) {
         attempt++;
-        const status = (err as { status?: number })?.status;
-        const isRateLimit = status === 403 || status === 429;
+        const errObj = err as {
+          status?: number;
+          message?: string;
+          response?: { headers?: Record<string, string | undefined> };
+        };
+        const status = errObj?.status;
+        const headers = errObj?.response?.headers || {};
+        const msg = String(errObj?.message || '').toLowerCase();
+
+        const remaining = headers['x-ratelimit-remaining'];
+        const retryAfter = headers['retry-after'];
+        const isRateLimitMsg = msg.includes('rate limit') || msg.includes('secondary rate limit');
+
+        const isRateLimit =
+          status === 429 ||
+          (status === 403 && (remaining === '0' || Boolean(retryAfter) || isRateLimitMsg));
+
+        if (status === 403 && !isRateLimit) {
+          throw new Error(
+            `GitHub returned 403 (${errObj?.message || 'Forbidden'}). Check the workflow permissions: issues: write, pull-requests: write, contents: read.`,
+          );
+        }
 
         if (isRateLimit && attempt < maxRetries) {
+          let waitMs = delayMs;
+          if (retryAfter) {
+            const parsed = parseInt(retryAfter, 10);
+            if (!isNaN(parsed) && parsed > 0) {
+              waitMs = Math.min(60000, parsed * 1000);
+            }
+          } else if (headers['x-ratelimit-reset'] && remaining === '0') {
+            const resetSec = parseInt(headers['x-ratelimit-reset'], 10);
+            if (!isNaN(resetSec)) {
+              const diff = resetSec * 1000 - Date.now();
+              if (diff > 0) {
+                waitMs = Math.min(60000, Math.max(1000, diff));
+              }
+            }
+          }
+
           logger.warn(
-            `GitHub API rate limit or secondary limit hit (status ${status}). Retrying in ${delayMs}ms (attempt ${attempt}/${maxRetries})...`,
+            `GitHub API rate limit or secondary limit hit (status ${status}). Retrying in ${waitMs}ms (attempt ${attempt}/${maxRetries})...`,
           );
-          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          await new Promise((resolve) => setTimeout(resolve, waitMs));
           delayMs *= 2;
           continue;
         }
@@ -102,6 +140,15 @@ export class GitHubClient {
    * Fetches content of a file from repository. Returns null if file does not exist (404).
    */
   async getFileContent(filePath: string): Promise<string | null> {
+    // 1. Check local filesystem first (saves API rate limit calls in local runs & checked-out workspaces)
+    if (fs.existsSync(filePath)) {
+      try {
+        return fs.readFileSync(filePath, 'utf8');
+      } catch {
+        // proceed to API fetch
+      }
+    }
+
     try {
       const response = await this.requestWithRetry(() =>
         this.octokit.rest.repos.getContent({
@@ -221,15 +268,25 @@ export class GitHubClient {
    * Lists comments on an issue or PR with pagination.
    */
   async listComments(issueNumber: number): Promise<CommentInfo[]> {
-    return this.octokit.paginate(
-      this.octokit.rest.issues.listComments,
-      {
-        owner: this.owner,
-        repo: this.repo,
-        issue_number: issueNumber,
-        per_page: 100,
-      },
-    );
+    try {
+      return await this.requestWithRetry(() =>
+        this.octokit.paginate(
+          this.octokit.rest.issues.listComments,
+          {
+            owner: this.owner,
+            repo: this.repo,
+            issue_number: issueNumber,
+            per_page: 100,
+          },
+        ),
+      );
+    } catch (err: unknown) {
+      if (this.dryRun) {
+        logger.warn(`[DRY-RUN] Could not fetch comments for #${issueNumber}: ${String(err)}`);
+        return [];
+      }
+      throw err;
+    }
   }
 
   /**
@@ -301,39 +358,59 @@ export class GitHubClient {
    * Fetches changed files in a pull request with pagination.
    */
   async listPullRequestFiles(prNumber: number): Promise<PullRequestFileInfo[]> {
-    const files = await this.octokit.paginate(
-      this.octokit.rest.pulls.listFiles,
-      {
-        owner: this.owner,
-        repo: this.repo,
-        pull_number: prNumber,
-        per_page: 100,
-      },
-    );
+    try {
+      const files = await this.requestWithRetry(() =>
+        this.octokit.paginate(
+          this.octokit.rest.pulls.listFiles,
+          {
+            owner: this.owner,
+            repo: this.repo,
+            pull_number: prNumber,
+            per_page: 100,
+          },
+        ),
+      );
 
-    return files.map((f) => ({
-      filename: f.filename,
-      status: f.status,
-      additions: f.additions,
-      deletions: f.deletions,
-      changes: f.changes,
-    }));
+      return files.map((f) => ({
+        filename: f.filename,
+        status: f.status,
+        additions: f.additions,
+        deletions: f.deletions,
+        changes: f.changes,
+      }));
+    } catch (err: unknown) {
+      if (this.dryRun) {
+        logger.warn(`[DRY-RUN] Could not fetch PR files for #${prNumber}: ${String(err)}`);
+        return [];
+      }
+      throw err;
+    }
   }
 
   /**
    * List recent issues for duplicate checking (with optional closed issues within window).
    */
   async listIssues(options?: { state?: 'open' | 'closed' | 'all'; since?: string }) {
-    return this.octokit.paginate(
-      this.octokit.rest.issues.listForRepo,
-      {
-        owner: this.owner,
-        repo: this.repo,
-        state: options?.state || 'open',
-        since: options?.since,
-        per_page: 100,
-      },
-    );
+    try {
+      return await this.requestWithRetry(() =>
+        this.octokit.paginate(
+          this.octokit.rest.issues.listForRepo,
+          {
+            owner: this.owner,
+            repo: this.repo,
+            state: options?.state || 'open',
+            since: options?.since,
+            per_page: 100,
+          },
+        ),
+      );
+    } catch (err: unknown) {
+      if (this.dryRun) {
+        logger.warn(`[DRY-RUN] Could not fetch issues for duplicate check: ${String(err)}`);
+        return [];
+      }
+      throw err;
+    }
   }
 
   /**
@@ -345,6 +422,77 @@ export class GitHubClient {
     body: string;
     targetCommitish?: string;
   }): Promise<{ id: number; html_url: string }> {
+    // 1. Check existing releases to ensure idempotency
+    let existingReleases: Array<{ id: number; tag_name: string; draft: boolean; html_url: string }> = [];
+    if (this.octokit?.paginate && this.octokit?.rest?.repos?.listReleases) {
+      try {
+        const res = await this.octokit.paginate(
+          this.octokit.rest.repos.listReleases,
+          {
+            owner: this.owner,
+            repo: this.repo,
+            per_page: 100,
+          },
+        );
+        if (Array.isArray(res)) {
+          existingReleases = res;
+        }
+      } catch (err: unknown) {
+        logger.warn(`Could not list existing releases: ${String(err)}`);
+      }
+    }
+
+    const existingMatch = (existingReleases || []).find((r) => r?.tag_name === params.tagName);
+
+    if (existingMatch) {
+      if (!existingMatch.draft) {
+        logger.info(
+          `Release ${params.tagName} is already published (id: ${existingMatch.id}). Skipping draft creation.`,
+        );
+        stepSummary.addItem({
+          type: 'release',
+          title: `Release ${params.tagName} already published`,
+          details: `Skipped: tag ${params.tagName} is already published at ${existingMatch.html_url}`,
+          status: 'skipped',
+        });
+        return { id: existingMatch.id, html_url: existingMatch.html_url };
+      }
+
+      // Existing release is a draft: update it instead of creating a duplicate
+      if (this.dryRun) {
+        logger.info(`[DRY-RUN] Would update existing draft release ${params.tagName} (id: ${existingMatch.id})`);
+        stepSummary.addItem({
+          type: 'release',
+          title: `Update Draft Release ${params.tagName}`,
+          details: `Existing draft #${existingMatch.id}`,
+          status: 'would-apply',
+        });
+        return { id: existingMatch.id, html_url: existingMatch.html_url };
+      }
+
+      const response = await this.requestWithRetry(() =>
+        this.octokit.rest.repos.updateRelease({
+          owner: this.owner,
+          repo: this.repo,
+          release_id: existingMatch.id,
+          tag_name: params.tagName,
+          name: params.name,
+          body: params.body,
+          draft: true,
+          target_commitish: params.targetCommitish,
+        }),
+      );
+
+      logger.info(`Updated existing draft release ${params.tagName} (id: ${response.data.id})`);
+      stepSummary.addItem({
+        type: 'release',
+        title: `Updated Draft Release ${params.tagName}`,
+        details: response.data.html_url,
+        status: 'applied',
+      });
+      return { id: response.data.id, html_url: response.data.html_url };
+    }
+
     if (this.dryRun) {
       logger.info(`[DRY-RUN] Would create draft release ${params.tagName}: "${params.name}"`);
       stepSummary.addItem({

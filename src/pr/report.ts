@@ -16,7 +16,7 @@ export function generatePRReportMarkdown(result: PRAnalysisResult): string {
   lines.push('');
 
   // Area Breakdown Table
-  if (result.areaGroups.length > 0) {
+  if (result.areaGroups && result.areaGroups.length > 0) {
     lines.push('#### 📂 Changes by Area');
     lines.push('');
     lines.push('| Area | Files | Changes (+ / -) |');
@@ -54,8 +54,13 @@ export function generatePRReportMarkdown(result: PRAnalysisResult): string {
     lines.push(
       `- ⚠️ **Sensitive Paths**: **${result.riskyFiles.length}** critical file(s) modified that require extra review:`,
     );
-    for (const rf of result.riskyFiles) {
+    const MAX_SHOWN_RISKY = 20;
+    const shown = result.riskyFiles.slice(0, MAX_SHOWN_RISKY);
+    for (const rf of shown) {
       lines.push(`  - \`${rf}\``);
+    }
+    if (result.riskyFiles.length > MAX_SHOWN_RISKY) {
+      lines.push(`  - *…and ${result.riskyFiles.length - MAX_SHOWN_RISKY} more*`);
     }
   }
 
@@ -81,7 +86,7 @@ export function generatePRReportMarkdown(result: PRAnalysisResult): string {
 
   lines.push('');
   lines.push('---');
-  lines.push('*Automated review by MaintainerKit · Maintainers stay in control*');
+  lines.push('*Automated review by Tendr · Maintainers stay in control*');
 
   return lines.join('\n');
 }

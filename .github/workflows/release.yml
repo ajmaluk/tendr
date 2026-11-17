@@ -42,25 +42,32 @@ jobs:
         id: major_tag
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Tag '$TAG' does not match semver format ^v[0-9]+\.[0-9]+\.[0-9]+$"
+            exit 1
+          fi
           MAJOR=$(echo "$TAG" | cut -d. -f1)
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "major=$MAJOR" >> "$GITHUB_OUTPUT"
 
       - name: Update Major Tag Pointer
+        env:
+          TAG: ${{ steps.major_tag.outputs.tag }}
+          MAJOR: ${{ steps.major_tag.outputs.major }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -fa "${{ steps.major_tag.outputs.major }}" -m "Update ${{ steps.major_tag.outputs.major }} to ${{ steps.major_tag.outputs.tag }}"
-          git push origin "${{ steps.major_tag.outputs.major }}" --force
+          git tag -fa "$MAJOR" -m "Update $MAJOR to $TAG"
+          git push origin "$MAJOR" --force
 
       - name: Create or Update GitHub Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.major_tag.outputs.tag }}
         run: |
-          TAG="${{ steps.major_tag.outputs.tag }}"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG already exists. Updating release..."
-            gh release edit "$TAG" --title "Release $TAG" --generate-notes
+            echo "Release $TAG already exists. Updating release title..."
+            gh release edit "$TAG" --title "Release $TAG"
           else
             gh release create "$TAG" \
               --title "Release $TAG" \

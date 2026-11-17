@@ -54,24 +54,37 @@ export function isContentEmptyOrPlaceholder(content: string): boolean {
  * Normalizes section titles for comparison (e.g. "Steps to reproduce" -> "steps to reproduce")
  */
 function normalizeTitle(title: string): string {
-  return title
+  const norm = title
     .toLowerCase()
     .replace(/[^\w\s]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+  // Ensure it contains letters or numbers
+  if (!/[a-z0-9]/.test(norm)) {
+    return '';
+  }
+  return norm;
 }
 
 /**
  * Extracts sections from markdown body formatted with headings (### Header)
  * or label lines (Header: value).
  */
-export function extractSections(markdown: string): Map<string, string> {
+export function extractSections(
+  markdown: string,
+  validSectionNames?: string[],
+): Map<string, string> {
   const sections = new Map<string, string>();
   if (!markdown) return sections;
+
+  const validNormNames = validSectionNames
+    ? new Set(validSectionNames.map((n) => normalizeTitle(n)).filter(Boolean))
+    : null;
 
   const lines = markdown.split(/\r?\n/);
   let currentHeader: string | null = null;
   let currentLines: string[] = [];
+  let inCodeFence = false;
 
   const flush = () => {
     if (currentHeader !== null) {
@@ -83,23 +96,62 @@ export function extractSections(markdown: string): Map<string, string> {
   };
 
   for (const line of lines) {
-    // 1. Heading check: e.g. # Title, ## Title, ### Title
-    const headingMatch = line.match(/^#{1,6}\s+(.+)$/);
-    if (headingMatch) {
-      flush();
-      currentHeader = normalizeTitle(headingMatch[1]);
+    const trimmed = line.trim();
+
+    // 0. Track code fences (``` or ~~~)
+    if (/^(```|~~~)/.test(trimmed)) {
+      inCodeFence = !inCodeFence;
+      if (currentHeader !== null) {
+        currentLines.push(line);
+      }
       continue;
     }
 
-    // 2. Bold header or form label check: e.g. **Steps to reproduce:** or Steps to reproduce:
-    const labelMatch = line.match(/^[*_]{0,2}([\w\s/-]{3,50})[*_]{0,2}:\s*(.*)$/);
-    if (labelMatch) {
-      flush();
-      currentHeader = normalizeTitle(labelMatch[1]);
-      if (labelMatch[2].trim()) {
-        currentLines.push(labelMatch[2].trim());
+    if (inCodeFence) {
+      if (currentHeader !== null) {
+        currentLines.push(line);
       }
       continue;
+    }
+
+    // 1. Heading check: e.g. # Title, ## Title, ### Title
+    const headingMatch = line.match(/^#{1,6}\s+(.+)$/);
+    if (headingMatch) {
+      const norm = normalizeTitle(headingMatch[1]);
+      if (norm.length > 0) {
+        flush();
+        currentHeader = norm;
+        continue;
+      }
+    }
+
+    // 2. Bold header or form label check: e.g. **Steps to reproduce:** or Steps to reproduce:
+    // Disallow URL schemes (e.g. https://)
+    if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) {
+      const labelMatch = line.match(/^[*_]{0,2}([\w\s/-]{3,50})[*_]{0,2}:\s*(.*)$/);
+      if (labelMatch) {
+        const candidateNorm = normalizeTitle(labelMatch[1]);
+        // Only treat as section header if it matches configured section names
+        const isValid =
+          validNormNames === null ||
+          validNormNames.has(candidateNorm) ||
+          Array.from(validNormNames).some(
+            (v) =>
+              v === candidateNorm ||
+              (v.length >= 4 &&
+                candidateNorm.length >= 4 &&
+                (v.includes(candidateNorm) || candidateNorm.includes(v))),
+          );
+
+        if (isValid && candidateNorm.length > 0) {
+          flush();
+          currentHeader = candidateNorm;
+          if (labelMatch[2].trim()) {
+            currentLines.push(labelMatch[2].trim());
+          }
+          continue;
+        }
+      }
     }
 
     if (currentHeader !== null) {
@@ -123,18 +175,33 @@ export function checkMissingRequiredSections(
   }
 
   const text = body || '';
-  const sections = extractSections(text);
+  const sections = extractSections(text, requiredSections);
   const missing: string[] = [];
 
   for (const required of requiredSections) {
     const normRequired = normalizeTitle(required);
+    if (!normRequired) continue;
+
     let matchedContent: string | null = null;
 
-    // Direct match or partial match on header title
+    // 1. Exact match on header title
     for (const [header, content] of sections.entries()) {
-      if (header.includes(normRequired) || normRequired.includes(header)) {
+      if (header === normRequired) {
         matchedContent = content;
         break;
+      }
+    }
+
+    // 2. Fallback partial match only when both strings have length >= 4
+    if (matchedContent === null && normRequired.length >= 4) {
+      for (const [header, content] of sections.entries()) {
+        if (
+          header.length >= 4 &&
+          (header.includes(normRequired) || normRequired.includes(header))
+        ) {
+          matchedContent = content;
+          break;
+        }
       }
     }
 
@@ -179,6 +246,30 @@ export async function processRequiredInfo(params: {
   }
 
   if (activeRequiredSections.size === 0) {
+    const existingComment = await findCommentByMarker(
+      client,
+      issueNumber,
+      COMMENT_MARKERS.TRIAGE_INFO,
+    );
+    if (existingComment || lowerLabels.includes(needsInfoLabel.toLowerCase())) {
+      logger.info(
+        `Issue #${issueNumber} no longer requires required-info. Cleaning up ${needsInfoLabel} and updating status comment.`,
+      );
+      await client.removeLabel(issueNumber, needsInfoLabel);
+      if (existingComment) {
+        const resolvedBody = [
+          '### ✅ Information Complete',
+          '',
+          'All required information provided or no longer required. Thank you!',
+        ].join('\n');
+        await postOrUpdateStickyComment(
+          client,
+          issueNumber,
+          COMMENT_MARKERS.TRIAGE_INFO,
+          resolvedBody,
+        );
+      }
+    }
     return { missingSections: [], passed: true };
   }
 

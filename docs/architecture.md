@@ -6,30 +6,30 @@ Tendr (MaintainerKit) is an open-source, deterministic GitHub Action built on Ty
 
 ## 🏛️ System Architecture
 
-```
-                  GitHub Event Trigger
-     (issues, pull_request_target, workflow_dispatch)
-                           │
-                           ▼
-                      src/main.ts
-             (Input parsing, Token masking)
-                           │
-         ┌─────────────────┼──────────────────┐
-         │                 │                  │
-         ▼                 ▼                  ▼
-     src/config       src/github          src/util
-   (Zod Validation,  (Octokit Client,    (Summary &
-    Default Fallback)  Sticky Comments,    Logger)
-                       Dry-Run Guard)
-                           │
-         ┌─────────────────┼──────────────────┐
-         ▼                 ▼                  ▼
-    src/triage          src/pr           src/release
-  - Labeler          - File Analysis    - Collector
-  - Required-Info    - Size Labels      - Classifier
-  - TF-IDF Duplicates - Sticky Report   - Semver Bump
-                                        - Notes Generator
-```
+<div align="center">
+  <img src="assets/architecture.svg" alt="Tendr Architecture Diagram" width="100%"/>
+</div>
+
+---
+
+## 🔄 Detailed Event Workflows
+
+### 1. Issue Triage Lifecycle
+<div align="center">
+  <img src="assets/triage-flow.svg" alt="Issue Triage Flow" width="100%"/>
+</div>
+
+### 2. Pull Request Analysis Engine
+<div align="center">
+  <img src="assets/pr-flow.svg" alt="PR Analysis Flow" width="100%"/>
+</div>
+
+### 3. Release Drafting Pipeline
+<div align="center">
+  <img src="assets/release-flow.svg" alt="Release Drafting Pipeline" width="100%"/>
+</div>
+
+---
 
 ---
 

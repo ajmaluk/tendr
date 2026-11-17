@@ -33,7 +33,7 @@ export class StepSummaryManager {
       return;
     }
 
-    core.summary.addHeading('MaintainerKit Summary', 2);
+    core.summary.addHeading('Tendr Run Summary', 2);
 
     if (this.dryRun) {
       core.summary.addRaw(

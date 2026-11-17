@@ -11,9 +11,9 @@ inputs:
     required: false
     default: ${{ github.token }}
   config-path:
-    description: 'Path to MaintainerKit YAML configuration file'
+    description: 'Path to Tendr YAML configuration file'
     required: false
-    default: '.github/maintainerkit.yml'
+    default: '.github/tendr.yml'
   dry-run:
     description: 'When true, logs all actions and writes to summary without modifying repo state'
     required: false

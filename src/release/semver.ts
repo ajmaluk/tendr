@@ -49,6 +49,30 @@ export function bumpVersion(
 }
 
 /**
+ * Compares two semantic version strings.
+ * Returns positive if a > b, negative if a < b, 0 if equal.
+ * Non-prereleases are prioritized over prereleases when versions are equal.
+ */
+export function compareSemver(a: string, b: string): number {
+  const parsedA = parseSemver(a);
+  const parsedB = parseSemver(b);
+  if (!parsedA && !parsedB) return a.localeCompare(b);
+  if (!parsedA) return -1;
+  if (!parsedB) return 1;
+
+  if (parsedA.major !== parsedB.major) return parsedA.major - parsedB.major;
+  if (parsedA.minor !== parsedB.minor) return parsedA.minor - parsedB.minor;
+  if (parsedA.patch !== parsedB.patch) return parsedA.patch - parsedB.patch;
+
+  const isPreA = /-[0-9A-Za-z.-]+$/.test(a);
+  const isPreB = /-[0-9A-Za-z.-]+$/.test(b);
+  if (isPreA && !isPreB) return -1;
+  if (!isPreA && isPreB) return 1;
+
+  return 0;
+}
+
+/**
  * Determines semver bump type based on PRs:
  * - Any breaking change -> major
  * - Any feat -> minor

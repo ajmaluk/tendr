@@ -15,7 +15,7 @@
 
 ---
 
-# How Maintainers Use Tendr to Fix Their Problems
+## How Maintainers Use Tendr to Fix Their Problems
 
 ## 1. Match the problem to the feature
 
@@ -45,6 +45,10 @@ on:
     types: [opened, edited]
   pull_request_target:
     types: [opened, synchronize, reopened]
+
+concurrency:
+  group: tendr-${{ github.event.issue.number || github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: false
 
 permissions:
   issues: write
@@ -113,7 +117,7 @@ To customize keywords, required sections, or risky paths, add `.github/tendr.yml
 triage:
   labels:
     - label: bug
-      keywords: ["crash", "exception", "traceback", "doesn't work", "regression"]
+      keywords: ["crash", "exception", "traceback", "doesn't work", "regression", "broken", "not working", "error", "fails", "failure"]
     - label: question
       keywords: ["how do i", "how to", "is it possible"]
     - label: enhancement

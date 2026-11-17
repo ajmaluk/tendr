@@ -1,6 +1,6 @@
 # Configuration Reference
 
-Tendr is configured via `.github/maintainerkit.yml` or `.github/tendr.yml`.
+Tendr is configured via `.github/tendr.yml` (with automatic fallback to `.github/maintainerkit.yml`).
 
 If no configuration file is present, Tendr operates using **zero-config sensible defaults**.
 
@@ -9,11 +9,11 @@ If no configuration file is present, Tendr operates using **zero-config sensible
 ## Complete Example
 
 ```yaml
-# .github/maintainerkit.yml (or .github/tendr.yml)
+# .github/tendr.yml
 triage:
   labels:
     - label: bug
-      keywords: ["crash", "exception", "traceback", "doesn't work", "regression"]
+      keywords: ["crash", "exception", "traceback", "doesn't work", "regression", "broken", "not working", "error", "fails", "failure"]
       patterns: ["^panic:", "segfault"]
     - label: question
       keywords: ["how do i", "how to", "is it possible"]
@@ -113,6 +113,7 @@ release:
 
 | Key | Type | Default | Description |
 |---|---|---|---|
+| `exclude-bots` | boolean | `false` | When true, excludes bot-authored PRs from release notes entirely. (Bot accounts are always excluded from New Contributors). |
 | `categories` | array | *Standard categories* | Category sections in release notes. |
 | `categories[].title` | string | **required** | Heading displayed in release notes. |
 | `categories[].labels` | array | `[]` | Labels mapping PRs to this category. |

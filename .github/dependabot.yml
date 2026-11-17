@@ -1,15 +1,23 @@
 version: 2
 updates:
-  # Maintain npm dependencies
+  # Maintain npm dependencies with grouping
   - package-ecosystem: 'npm'
     directory: '/'
     schedule:
-      interval: 'weekly'
-    open-pull-requests-limit: 10
+      interval: 'monthly'
+    open-pull-requests-limit: 3
+    groups:
+      dependencies:
+        patterns:
+          - '*'
 
   # Maintain GitHub Actions dependencies
   - package-ecosystem: 'github-actions'
     directory: '/'
     schedule:
-      interval: 'weekly'
-    open-pull-requests-limit: 10
+      interval: 'monthly'
+    open-pull-requests-limit: 3
+    groups:
+      actions:
+        patterns:
+          - '*'

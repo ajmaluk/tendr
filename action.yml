@@ -1,4 +1,4 @@
-name: 'Tendr MaintainerKit'
+name: 'Tendr'
 description: 'Automate issue triage, PR analysis, and release drafting with deterministic rules and zero external APIs.'
 author: 'ajmaluk <ajmaluk.me@gmail.com>'
 branding:

@@ -1,7 +1,7 @@
-# Tendr (MaintainerKit)
+# Tendr
 
 [![CI](https://github.com/ajmaluk/tendr/actions/workflows/ci.yml/badge.svg)](https://github.com/ajmaluk/tendr/actions/workflows/ci.yml)
-[![Marketplace](https://img.shields.io/badge/Marketplace-Tendr-blue.svg?colorA=24292e&colorB=0366d6&style=flat&logo=github)](https://github.com/marketplace/actions/tendr-maintainerkit)
+[![Release](https://img.shields.io/github/v/release/ajmaluk/tendr?color=blue&label=Release)](https://github.com/ajmaluk/tendr/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![TypeScript](https://img.shields.io/badge/TypeScript-Strict%20Mode-blue.svg)](https://www.typescriptlang.org/)
 
@@ -9,10 +9,8 @@
 
 ---
 
-<!-- Demo placeholder -->
 <div align="center">
-  <img src="https://raw.githubusercontent.com/ajmaluk/tendr/main/docs/assets/demo.png" alt="Tendr Demo" width="750" onerror="this.style.display='none'"/>
-  <p><em>Tendr generates sticky PR reports, detects missing issue details, finds duplicates, and drafts releases.</em></p>
+  <img src="docs/assets/demo.svg" alt="Tendr Architecture &amp; Workflow Overview" width="100%"/>
 </div>
 
 ---
@@ -36,7 +34,7 @@
 
 ## 2. ⚡ 3-Step Quick Start
 
-### Step 1: Create the workflow file
+### Step 1: Create the triage & PR workflow
 
 Create `.github/workflows/tendr.yml` in your repository:
 
@@ -74,6 +72,33 @@ Zero modifications are made while `dry-run: true` is active.
 Change `dry-run: true` to `dry-run: false`. From then on, every new issue and PR is handled automatically.
 
 Tendr **never** closes, merges, or deletes anything. Maintainers stay 100% in control.
+
+---
+
+## 🚀 Automated Release Drafting Workflow
+
+To automate categorized release notes and draft release generation from merged PRs, add `.github/workflows/tendr-release.yml`:
+
+```yaml
+name: Draft Release
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  draft-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: ajmaluk/tendr@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          features: release
+```
 
 ---
 

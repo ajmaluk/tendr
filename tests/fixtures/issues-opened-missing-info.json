@@ -1,0 +1,16 @@
+{
+  "action": "opened",
+  "issue": {
+    "number": 43,
+    "title": "Regression in login screen",
+    "body": "It doesn't work!\n\n### Version\n_No response_\n\n### Steps to reproduce\nN/A",
+    "labels": [],
+    "author_association": "NONE"
+  },
+  "repository": {
+    "name": "tendr",
+    "owner": {
+      "login": "ajmaluk"
+    }
+  }
+}

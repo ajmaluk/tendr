@@ -1,0 +1,41 @@
+name: 'Tendr MaintainerKit'
+description: 'Automate issue triage, PR analysis, and release drafting with deterministic rules and zero external APIs.'
+author: 'ajmaluk <ajmaluk.me@gmail.com>'
+branding:
+  icon: 'git-pull-request'
+  color: 'purple'
+
+inputs:
+  github-token:
+    description: 'GitHub token for API access (defaults to github.token)'
+    required: false
+    default: ${{ github.token }}
+  config-path:
+    description: 'Path to MaintainerKit YAML configuration file'
+    required: false
+    default: '.github/maintainerkit.yml'
+  dry-run:
+    description: 'When true, logs all actions and writes to summary without modifying repo state'
+    required: false
+    default: 'false'
+  features:
+    description: 'Comma-separated list of features to run (triage, pull-requests, release)'
+    required: false
+    default: 'triage,pull-requests'
+  release-tag:
+    description: 'Tag name when triggering release drafting directly'
+    required: false
+
+outputs:
+  labels-added:
+    description: 'Comma-separated list of labels added during this run'
+  duplicates-found:
+    description: 'JSON list of issue numbers identified as potential duplicates'
+  suggested-version:
+    description: 'Suggested semantic version for the next release'
+  release-notes:
+    description: 'Generated markdown release notes'
+
+runs:
+  using: 'node20'
+  main: 'dist/index.js'

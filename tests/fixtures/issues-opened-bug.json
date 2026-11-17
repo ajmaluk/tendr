@@ -1,0 +1,16 @@
+{
+  "action": "opened",
+  "issue": {
+    "number": 42,
+    "title": "Application crash when clicking submit",
+    "body": "### Steps to reproduce\n1. Click submit\n\n### Expected\nForm submits\n\n### Actual\nApp crashed with traceback\n\n### Version\n1.0.0",
+    "labels": [],
+    "author_association": "MEMBER"
+  },
+  "repository": {
+    "name": "tendr",
+    "owner": {
+      "login": "ajmaluk"
+    }
+  }
+}

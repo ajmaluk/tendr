@@ -1,0 +1,18 @@
+# Dependencies
+node_modules/
+
+# Build artifacts (dist is committed for GitHub Actions)
+lib/
+
+# Test coverage
+coverage/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS and Editor
+.DS_Store
+.vscode/
+.idea/
+*.swp

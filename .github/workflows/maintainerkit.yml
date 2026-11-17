@@ -1,0 +1,27 @@
+name: MaintainerKit
+
+on:
+  issues:
+    types: [opened, edited]
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  issues: write
+  pull-requests: write
+  contents: read
+
+jobs:
+  triage:
+    name: MaintainerKit Triage & Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run MaintainerKit
+        uses: ./
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          config-path: .github/maintainerkit.yml
+          dry-run: false

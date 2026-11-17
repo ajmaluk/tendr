@@ -54,10 +54,9 @@ jobs:
           git push origin "${{ steps.major_tag.outputs.major }}" --force
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@c062e08bd532815e2082a85e87e3ef29c3e6d190 # v2.0.8
-        with:
-          tag_name: ${{ steps.major_tag.outputs.tag }}
-          name: Release ${{ steps.major_tag.outputs.tag }}
-          draft: false
-          prerelease: false
-          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.major_tag.outputs.tag }}" \
+            --title "Release ${{ steps.major_tag.outputs.tag }}" \
+            --generate-notes

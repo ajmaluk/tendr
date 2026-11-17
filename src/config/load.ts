@@ -20,6 +20,10 @@ export async function loadConfig(
   let rawContent: string | null = null;
   try {
     rawContent = await fetcher.getFileContent(configPath);
+    // If not found and using default maintainerkit.yml, also try .github/tendr.yml
+    if (!rawContent && configPath === '.github/maintainerkit.yml') {
+      rawContent = await fetcher.getFileContent('.github/tendr.yml');
+    }
   } catch (err: unknown) {
     const errorMsg = err instanceof Error ? err.message : String(err);
     logger.warn(`Failed to retrieve configuration file (${configPath}): ${errorMsg}`);

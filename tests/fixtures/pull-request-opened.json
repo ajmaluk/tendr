@@ -1,0 +1,16 @@
+{
+  "action": "opened",
+  "pull_request": {
+    "number": 105,
+    "title": "feat(auth): implement oauth token refresh",
+    "body": "This implements refresh tokens for OAuth.\n\nCloses #42",
+    "labels": [],
+    "author_association": "CONTRIBUTOR"
+  },
+  "repository": {
+    "name": "tendr",
+    "owner": {
+      "login": "ajmaluk"
+    }
+  }
+}

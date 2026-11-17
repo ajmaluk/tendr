@@ -1,0 +1,38 @@
+name: Check Dist
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check-dist:
+    name: Verify dist/ is committed
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Rebuild dist/
+        run: npm run build
+
+      - name: Compare dist/ with committed code
+        run: |
+          if [ -n "$(git status --porcelain dist/)" ]; then
+            echo "::error::dist/ is outdated! Run 'npm run build' locally and commit the resulting dist/ directory before pushing."
+            git status --porcelain dist/
+            git diff dist/
+            exit 1
+          fi
+          echo "dist/ is up to date with src/."

@@ -1,0 +1,42 @@
+name: 🐛 Bug Report
+description: Report a bug or unexpected behavior in Tendr
+title: "fix: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this issue! Please provide as much context as possible.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: What version of Tendr or Node are you running?
+      placeholder: "e.g., Tendr v1.0.0, Node v20.10.0"
+    validations:
+      required: true
+  - type: textarea
+    id: steps-to-reproduce
+    attributes:
+      label: Steps to Reproduce
+      description: Describe the steps required to reproduce the behavior.
+      placeholder: |
+        1. Add workflow `.github/workflows/tendr.yml`
+        2. Run action on event `issues`
+        3. See error
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: A concise description of what you expected to happen.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: A concise description of what actually happened (include logs/tracebacks if possible).
+    validations:
+      required: true

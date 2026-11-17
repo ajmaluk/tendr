@@ -1,0 +1,63 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & Publish Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify tests
+        run: npm test
+
+      - name: Verify dist
+        run: |
+          npm run build
+          if [ -n "$(git status --porcelain dist/)" ]; then
+            echo "::error::dist/ is not clean after build!"
+            exit 1
+          fi
+
+      - name: Extract Major Tag
+        id: major_tag
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          MAJOR=$(echo "$TAG" | cut -d. -f1)
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "major=$MAJOR" >> "$GITHUB_OUTPUT"
+
+      - name: Update Major Tag Pointer
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -fa "${{ steps.major_tag.outputs.major }}" -m "Update ${{ steps.major_tag.outputs.major }} to ${{ steps.major_tag.outputs.tag }}"
+          git push origin "${{ steps.major_tag.outputs.major }}" --force
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@c062e08bd532815e2082a85e87e3ef29c3e6d190 # v2.0.8
+        with:
+          tag_name: ${{ steps.major_tag.outputs.tag }}
+          name: Release ${{ steps.major_tag.outputs.tag }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true

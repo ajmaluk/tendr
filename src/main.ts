@@ -8,6 +8,10 @@ import { detectDuplicateIssues } from './triage/duplicates';
 import { analyzePullRequest } from './pr/analyze';
 import { generatePRReportMarkdown } from './pr/report';
 import { determineOutdatedSizeLabels } from './pr/size';
+import { getLatestReleaseOrTag, collectMergedPRs } from './release/collect';
+import { classifyPullRequests } from './release/classify';
+import { generateReleaseNotes } from './release/notes';
+import { determineBumpType, bumpVersion } from './release/semver';
 import { COMMENT_MARKERS, postOrUpdateStickyComment } from './github/comments';
 import { logger } from './util/logger';
 import { stepSummary } from './util/summary';
@@ -23,6 +27,7 @@ export async function run(): Promise<void> {
     const configPath = core.getInput('config-path') || '.github/maintainerkit.yml';
     const dryRun = core.getInput('dry-run') === 'true';
     const featuresInput = core.getInput('features') || 'triage,pull-requests';
+    const releaseTagInput = core.getInput('release-tag') || '';
     const enabledFeatures = featuresInput
       .split(',')
       .map((f) => f.trim().toLowerCase())
@@ -44,6 +49,8 @@ export async function run(): Promise<void> {
 
     const labelsAddedTotal: string[] = [];
     const duplicatesFound: number[] = [];
+    let suggestedVersionOutput = '';
+    let releaseNotesOutput = '';
 
     // --- FEATURE A: ISSUE TRIAGE ---
     if (eventName === 'issues' && enabledFeatures.includes('triage')) {
@@ -183,11 +190,62 @@ export async function run(): Promise<void> {
       logger.endGroup();
     }
 
+    // --- FEATURE C: RELEASE DRAFTING ---
+    const isReleaseEvent =
+      eventName === 'workflow_dispatch' ||
+      (eventName === 'push' && Boolean(payload.ref && payload.ref.startsWith('refs/tags/'))) ||
+      enabledFeatures.includes('release');
+
+    if (isReleaseEvent && enabledFeatures.includes('release')) {
+      logger.startGroup('Release Drafting');
+
+      // 1. Find latest release or tag
+      const latest = await getLatestReleaseOrTag(client);
+      logger.info(`Latest tag detected: ${latest.tagName || 'none'} (date: ${latest.publishedAt || 'none'})`);
+
+      // 2. Collect merged PRs
+      const { prs, firstTimeContributors } = await collectMergedPRs(client, latest.publishedAt);
+      logger.info(`Collected ${prs.length} merged PRs for release drafting.`);
+
+      // 3. Classify PRs
+      const { classified } = classifyPullRequests(prs, config.release);
+
+      // 4. Determine semver bump
+      const bumpType = determineBumpType(
+        classified.map((c) => ({
+          isBreaking: c.isBreaking,
+          type: c.conventionalType,
+        })),
+      );
+
+      const targetVersion = releaseTagInput || bumpVersion(latest.tagName, bumpType);
+      suggestedVersionOutput = targetVersion;
+      logger.info(`Suggested next version: ${targetVersion} (bump type: ${bumpType})`);
+
+      // 5. Generate release notes
+      releaseNotesOutput = generateReleaseNotes({
+        version: targetVersion,
+        previousVersion: latest.tagName || undefined,
+        classifiedPRs: classified,
+        config: config.release,
+        firstTimeContributors,
+      });
+
+      // 6. Create draft release
+      await client.createDraftRelease({
+        tagName: targetVersion,
+        name: `Release ${targetVersion}`,
+        body: releaseNotesOutput,
+      });
+
+      logger.endGroup();
+    }
+
     // Set outputs
     core.setOutput('labels-added', labelsAddedTotal.join(','));
     core.setOutput('duplicates-found', JSON.stringify(duplicatesFound));
-    core.setOutput('suggested-version', '');
-    core.setOutput('release-notes', '');
+    core.setOutput('suggested-version', suggestedVersionOutput);
+    core.setOutput('release-notes', releaseNotesOutput);
 
     // Write job summary
     await stepSummary.write();

@@ -33097,6 +33097,10 @@ const duplicates_1 = __nccwpck_require__(704);
 const analyze_1 = __nccwpck_require__(4862);
 const report_1 = __nccwpck_require__(9118);
 const size_1 = __nccwpck_require__(4457);
+const collect_1 = __nccwpck_require__(4591);
+const classify_1 = __nccwpck_require__(7247);
+const notes_1 = __nccwpck_require__(3504);
+const semver_1 = __nccwpck_require__(2161);
 const comments_1 = __nccwpck_require__(6645);
 const logger_1 = __nccwpck_require__(6618);
 const summary_1 = __nccwpck_require__(7724);
@@ -33110,6 +33114,7 @@ async function run() {
         const configPath = core.getInput('config-path') || '.github/maintainerkit.yml';
         const dryRun = core.getInput('dry-run') === 'true';
         const featuresInput = core.getInput('features') || 'triage,pull-requests';
+        const releaseTagInput = core.getInput('release-tag') || '';
         const enabledFeatures = featuresInput
             .split(',')
             .map((f) => f.trim().toLowerCase())
@@ -33126,6 +33131,8 @@ async function run() {
         logger_1.logger.info(`Received GitHub event: ${eventName} (action: ${payload.action || 'none'})`);
         const labelsAddedTotal = [];
         const duplicatesFound = [];
+        let suggestedVersionOutput = '';
+        let releaseNotesOutput = '';
         // --- FEATURE A: ISSUE TRIAGE ---
         if (eventName === 'issues' && enabledFeatures.includes('triage')) {
             const issue = payload.issue;
@@ -33230,11 +33237,49 @@ async function run() {
             }
             logger_1.logger.endGroup();
         }
+        // --- FEATURE C: RELEASE DRAFTING ---
+        const isReleaseEvent = eventName === 'workflow_dispatch' ||
+            (eventName === 'push' && Boolean(payload.ref && payload.ref.startsWith('refs/tags/'))) ||
+            enabledFeatures.includes('release');
+        if (isReleaseEvent && enabledFeatures.includes('release')) {
+            logger_1.logger.startGroup('Release Drafting');
+            // 1. Find latest release or tag
+            const latest = await (0, collect_1.getLatestReleaseOrTag)(client);
+            logger_1.logger.info(`Latest tag detected: ${latest.tagName || 'none'} (date: ${latest.publishedAt || 'none'})`);
+            // 2. Collect merged PRs
+            const { prs, firstTimeContributors } = await (0, collect_1.collectMergedPRs)(client, latest.publishedAt);
+            logger_1.logger.info(`Collected ${prs.length} merged PRs for release drafting.`);
+            // 3. Classify PRs
+            const { classified } = (0, classify_1.classifyPullRequests)(prs, config.release);
+            // 4. Determine semver bump
+            const bumpType = (0, semver_1.determineBumpType)(classified.map((c) => ({
+                isBreaking: c.isBreaking,
+                type: c.conventionalType,
+            })));
+            const targetVersion = releaseTagInput || (0, semver_1.bumpVersion)(latest.tagName, bumpType);
+            suggestedVersionOutput = targetVersion;
+            logger_1.logger.info(`Suggested next version: ${targetVersion} (bump type: ${bumpType})`);
+            // 5. Generate release notes
+            releaseNotesOutput = (0, notes_1.generateReleaseNotes)({
+                version: targetVersion,
+                previousVersion: latest.tagName || undefined,
+                classifiedPRs: classified,
+                config: config.release,
+                firstTimeContributors,
+            });
+            // 6. Create draft release
+            await client.createDraftRelease({
+                tagName: targetVersion,
+                name: `Release ${targetVersion}`,
+                body: releaseNotesOutput,
+            });
+            logger_1.logger.endGroup();
+        }
         // Set outputs
         core.setOutput('labels-added', labelsAddedTotal.join(','));
         core.setOutput('duplicates-found', JSON.stringify(duplicatesFound));
-        core.setOutput('suggested-version', '');
-        core.setOutput('release-notes', '');
+        core.setOutput('suggested-version', suggestedVersionOutput);
+        core.setOutput('release-notes', releaseNotesOutput);
         // Write job summary
         await summary_1.stepSummary.write();
     }
@@ -33500,6 +33545,217 @@ function determineOutdatedSizeLabels(existingLabels, currentSizeLabel) {
 
 /***/ }),
 
+/***/ 7247:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.isBreakingChange = isBreakingChange;
+exports.classifyPullRequests = classifyPullRequests;
+const conventional_1 = __nccwpck_require__(4255);
+/**
+ * Checks if a PR qualifies as a breaking change based on label, title, or body footer.
+ */
+function isBreakingChange(pr, parsedType) {
+    // 1. Label check
+    const lowerLabels = pr.labels.map((l) => l.toLowerCase());
+    if (lowerLabels.some((l) => l.includes('breaking'))) {
+        return true;
+    }
+    // 2. Conventional commit exclamation check (e.g. feat!:)
+    if (parsedType.isBreaking) {
+        return true;
+    }
+    // 3. Footer check in body
+    if (pr.body && /(?:BREAKING[- ]CHANGE|BREAKING:)/i.test(pr.body)) {
+        return true;
+    }
+    return false;
+}
+/**
+ * Classifies PRs into configured release categories:
+ * Priority order:
+ * 1. Category labels mapping
+ * 2. Conventional Commit type mapping
+ * 3. Fallback to "Other Changes"
+ */
+function classifyPullRequests(prs, config) {
+    const result = [];
+    let breakingCount = 0;
+    for (const pr of prs) {
+        const conventional = (0, conventional_1.parseConventionalCommit)(pr.title);
+        const breaking = isBreakingChange(pr, conventional);
+        if (breaking) {
+            breakingCount++;
+        }
+        const prLabelsLower = pr.labels.map((l) => l.toLowerCase());
+        let matchedCategory = null;
+        // If it's a breaking change, check if there is a Breaking Changes category
+        if (breaking) {
+            const breakingCategory = config.categories.find((c) => c.title.toLowerCase().includes('breaking') ||
+                (c.labels && c.labels.some((l) => l.toLowerCase().includes('breaking'))));
+            if (breakingCategory) {
+                matchedCategory = breakingCategory.title;
+            }
+        }
+        // 1. Match by label mapping
+        if (!matchedCategory) {
+            for (const category of config.categories) {
+                if (category.labels && category.labels.length > 0) {
+                    const hasLabel = category.labels.some((catLabel) => prLabelsLower.includes(catLabel.toLowerCase()));
+                    if (hasLabel) {
+                        matchedCategory = category.title;
+                        break;
+                    }
+                }
+            }
+        }
+        // 2. Match by Conventional Commit type mapping
+        if (!matchedCategory && conventional.isValid && conventional.type) {
+            for (const category of config.categories) {
+                if (category.types && category.types.length > 0) {
+                    const hasType = category.types.some((t) => t.toLowerCase() === conventional.type?.toLowerCase());
+                    if (hasType) {
+                        matchedCategory = category.title;
+                        break;
+                    }
+                }
+            }
+        }
+        // 3. Fallback
+        const finalCategory = matchedCategory || 'Other Changes';
+        result.push({
+            pr,
+            category: finalCategory,
+            isBreaking: breaking,
+            conventionalType: conventional.type,
+        });
+    }
+    return { classified: result, breakingCount };
+}
+
+
+/***/ }),
+
+/***/ 4591:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getLatestReleaseOrTag = getLatestReleaseOrTag;
+exports.collectMergedPRs = collectMergedPRs;
+const logger_1 = __nccwpck_require__(6618);
+/**
+ * Finds the latest published release or tag.
+ */
+async function getLatestReleaseOrTag(client) {
+    // 1. Try getLatestRelease
+    try {
+        const res = await client.octokit.rest.repos.getLatestRelease({
+            owner: client.owner,
+            repo: client.repo,
+        });
+        if (res.data) {
+            return {
+                tagName: res.data.tag_name,
+                publishedAt: res.data.published_at || null,
+            };
+        }
+    }
+    catch (err) {
+        const status = err?.status;
+        if (status !== 404) {
+            logger_1.logger.warn(`Failed to fetch latest release: ${String(err)}`);
+        }
+    }
+    // 2. Fall back to listTags
+    try {
+        const tags = await client.octokit.rest.repos.listTags({
+            owner: client.owner,
+            repo: client.repo,
+            per_page: 1,
+        });
+        if (tags.data.length > 0) {
+            const latestTag = tags.data[0];
+            let commitDate = null;
+            try {
+                const commit = await client.octokit.rest.repos.getCommit({
+                    owner: client.owner,
+                    repo: client.repo,
+                    ref: latestTag.commit.sha,
+                });
+                commitDate = commit.data.commit.author?.date || null;
+            }
+            catch {
+                commitDate = null;
+            }
+            return {
+                tagName: latestTag.name,
+                publishedAt: commitDate,
+            };
+        }
+    }
+    catch (err) {
+        logger_1.logger.warn(`Failed to fetch tags: ${String(err)}`);
+    }
+    return { tagName: null, publishedAt: null };
+}
+/**
+ * Collects all merged PRs since the latest release date.
+ */
+async function collectMergedPRs(client, sinceDate) {
+    logger_1.logger.info(`Collecting merged PRs${sinceDate ? ` since ${sinceDate}` : ' across all history'}...`);
+    const closedPRs = await client.octokit.paginate(client.octokit.rest.pulls.list, {
+        owner: client.owner,
+        repo: client.repo,
+        state: 'closed',
+        sort: 'updated',
+        direction: 'desc',
+        per_page: 100,
+    });
+    const sinceTime = sinceDate ? new Date(sinceDate).getTime() : 0;
+    const releasePRs = [];
+    const historicalAuthors = new Set();
+    for (const raw of closedPRs) {
+        if (!raw.merged_at)
+            continue;
+        const mergedTime = new Date(raw.merged_at).getTime();
+        const author = raw.user?.login || 'unknown';
+        const labels = (raw.labels || []).map((l) => l.name);
+        if (mergedTime > sinceTime) {
+            releasePRs.push({
+                number: raw.number,
+                title: raw.title,
+                body: raw.body || '',
+                author,
+                mergedAt: raw.merged_at,
+                labels,
+            });
+        }
+        else {
+            historicalAuthors.add(author);
+        }
+    }
+    // Reverse so they are chronological
+    releasePRs.reverse();
+    // Determine new contributors
+    const firstTimeContributors = [];
+    const seenNewInRelease = new Set();
+    for (const pr of releasePRs) {
+        if (!historicalAuthors.has(pr.author) && !seenNewInRelease.has(pr.author) && pr.author !== 'unknown') {
+            seenNewInRelease.add(pr.author);
+            firstTimeContributors.push({ author: pr.author, prNumber: pr.number });
+        }
+    }
+    logger_1.logger.info(`Collected ${releasePRs.length} merged PR(s) and ${firstTimeContributors.length} new contributor(s).`);
+    return { prs: releasePRs, firstTimeContributors };
+}
+
+
+/***/ }),
+
 /***/ 4255:
 /***/ ((__unused_webpack_module, exports) => {
 
@@ -33533,6 +33789,145 @@ function parseConventionalCommit(title) {
         description: description.trim(),
         raw: trimmed,
     };
+}
+
+
+/***/ }),
+
+/***/ 3504:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.generateReleaseNotes = generateReleaseNotes;
+const client_1 = __nccwpck_require__(6584);
+/**
+ * Strips commit type prefixes (e.g. "feat(auth): " -> "") if desired,
+ * or keeps clean title and ensures markdown formatting is clean.
+ */
+function cleanPRTitle(title) {
+    // Replace unescaped pipes or backticks that could break formatting
+    return title.replace(/\r?\n/g, ' ').trim();
+}
+/**
+ * Generates release notes in Markdown grouped by category, with a New Contributors section.
+ */
+function generateReleaseNotes(options) {
+    const { version, classifiedPRs, config, firstTimeContributors = [] } = options;
+    const lines = [];
+    lines.push(`## Release ${version}`);
+    lines.push('');
+    // Group PRs by category
+    const categoryMap = new Map();
+    for (const item of classifiedPRs) {
+        const list = categoryMap.get(item.category) || [];
+        list.push(item);
+        categoryMap.set(item.category, list);
+    }
+    // Iterate in configured category order
+    const renderedCategories = new Set();
+    for (const cat of config.categories) {
+        const items = categoryMap.get(cat.title);
+        if (items && items.length > 0) {
+            lines.push(`### ${cat.title}`);
+            lines.push('');
+            for (const item of items) {
+                const title = cleanPRTitle(item.pr.title);
+                lines.push(`- ${title} (#${item.pr.number}) @${item.pr.author}`);
+            }
+            lines.push('');
+            renderedCategories.add(cat.title);
+        }
+    }
+    // Any remaining categories (e.g. "Other Changes")
+    for (const [catTitle, items] of categoryMap.entries()) {
+        if (!renderedCategories.has(catTitle) && items.length > 0) {
+            lines.push(`### ${catTitle}`);
+            lines.push('');
+            for (const item of items) {
+                const title = cleanPRTitle(item.pr.title);
+                lines.push(`- ${title} (#${item.pr.number}) @${item.pr.author}`);
+            }
+            lines.push('');
+        }
+    }
+    // New Contributors Section
+    if (firstTimeContributors.length > 0) {
+        lines.push('### New Contributors');
+        lines.push('');
+        for (const c of firstTimeContributors) {
+            lines.push(`- @${(0, client_1.sanitizeUserText)(c.author)} made their first contribution in #${c.prNumber}! 🎉`);
+        }
+        lines.push('');
+    }
+    return lines.join('\n').trim();
+}
+
+
+/***/ }),
+
+/***/ 2161:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.parseSemver = parseSemver;
+exports.bumpVersion = bumpVersion;
+exports.determineBumpType = determineBumpType;
+/**
+ * Parses a semantic version string (e.g. "v1.2.3" or "2.0.1").
+ */
+function parseSemver(versionStr) {
+    const match = versionStr.trim().match(/^(v)?(\d+)\.(\d+)\.(\d+)/i);
+    if (!match)
+        return null;
+    return {
+        hasVPrefix: Boolean(match[1]),
+        major: parseInt(match[2], 10),
+        minor: parseInt(match[3], 10),
+        patch: parseInt(match[4], 10),
+    };
+}
+/**
+ * Calculates the next version string based on current version and bump type.
+ */
+function bumpVersion(currentVersionStr, bumpType) {
+    if (!currentVersionStr) {
+        return 'v1.0.0';
+    }
+    const parsed = parseSemver(currentVersionStr);
+    if (!parsed) {
+        return 'v1.0.0';
+    }
+    const prefix = parsed.hasVPrefix ? 'v' : '';
+    if (bumpType === 'major') {
+        return `${prefix}${parsed.major + 1}.0.0`;
+    }
+    if (bumpType === 'minor') {
+        return `${prefix}${parsed.major}.${parsed.minor + 1}.0`;
+    }
+    return `${prefix}${parsed.major}.${parsed.minor}.${parsed.patch + 1}`;
+}
+/**
+ * Determines semver bump type based on PRs:
+ * - Any breaking change -> major
+ * - Any feat -> minor
+ * - Otherwise -> patch
+ */
+function determineBumpType(prs) {
+    for (const pr of prs) {
+        if (pr.isBreaking) {
+            return 'major';
+        }
+    }
+    for (const pr of prs) {
+        if (pr.type === 'feat') {
+            return 'minor';
+        }
+    }
+    return 'patch';
 }
 
 
